@@ -2,7 +2,7 @@ import Testing
 @testable import TouchCore
 
 // Role chains (element first, up to the window) as reported by the Accessibility API on this Mac,
-// captured with `TouchBridge --ax-probe` on 2026-10-09. `offset` is points below the window's top edge.
+// captured with `TouchNext --ax-probe` on 2026-10-09. `offset` is points below the window's top edge.
 
 @Test func safarisEmptyToolbarMovesTheWindow() {
     #expect(WindowDragRules.isDragArea(chain: ["Group", "Toolbar", "Window/StandardWindow"], offset: 4))

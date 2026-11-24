@@ -1,8 +1,8 @@
-# TouchBridge
+# TouchNext
 
 **A real touchscreen for macOS, for USB touch monitors.** Touches act where you touch, the cursor stays where it is, and the trackpad's gestures work with your fingers on the screen: scrolling, pinch, rotate, Mission Control, Spaces, Launchpad, Notification Center and Safari's back/forward page swipes.
 
-TouchBridge is a small menu-bar app that runs in user space:
+TouchNext is a small menu-bar app that runs in user space:
 - It takes over the touch panel and recognizes gestures itself.
 - It sends macOS the same events a trackpad and mouse would, aimed at the window under your fingers.
 - No kernel or system extension, no root, and System Integrity Protection stays on.
@@ -36,7 +36,7 @@ macOS has no touchscreen support:
 - **Touches land on the wrong screen.** macOS treats a USB touch panel as an absolute pointing device, mapped onto whichever display the cursor is on. With a touch monitor as a second display, touching it while the cursor is on the laptop clicks the matching spot on the laptop screen.
 - **One finger at a time.** There's no multitouch: no two-finger scrolling, no pinch, no gestures.
 
-Commercial drivers exist. TouchBridge is a free, user-space alternative. Its goal is to make the touch display feel like it has a trackpad built in.
+Commercial drivers exist. TouchNext is a free, user-space alternative. Its goal is to make the touch display feel like it has a trackpad built in.
 
 ## Features
 
@@ -74,9 +74,9 @@ Commercial drivers exist. TouchBridge is a free, user-space alternative. Its goa
 | Six or more fingers | Ignored (palm rejection) |
 
 **Where the system gestures appear.** Space switching, Notification Center and Launchpad open on the touch display, not on whichever screen has the cursor or the focused window:
-- **Spaces and Notification Center** appear on the display with the cursor. While they open, TouchBridge briefly parks the hidden cursor on the touch display.
+- **Spaces and Notification Center** appear on the display with the cursor. While they open, TouchNext briefly parks the hidden cursor on the touch display.
 - **Launchpad** opens on the display that has the Dock. A pinch-in on the touch display first brings the Dock there, then (by default) sends it back after Launchpad closes.
-- **Focus after a Space switch.** macOS moves focus to the switched display. TouchBridge gives it back to the app you were using on the other screen; you can turn this off.
+- **Focus after a Space switch.** macOS moves focus to the switched display. TouchNext gives it back to the app you were using on the other screen; you can turn this off.
 
 **Trackpad settings.** With "Follow Trackpad Settings" on (the default), each gesture follows its switch in System Settings → Trackpad: three-finger drag, scrolling, momentum, pinch, rotate, Mission Control, Spaces, Launchpad/Desktop and Notification Center.
 
@@ -89,7 +89,7 @@ Commercial drivers exist. TouchBridge is a free, user-space alternative. Its goa
 
 So more than one finger can only reach apps that read a multitouch protocol themselves. TUIO is the standard one: an open protocol from the multitouch-table community, used in creative coding, interactive installations and DIY touch tables.
 
-**The ✋ → Touch Mode menu** picks what touches do. It goes back to Gestures every time TouchBridge starts, so a special mode can't be left on by accident.
+**The ✋ → Touch Mode menu** picks what touches do. It goes back to Gestures every time TouchNext starts, so a special mode can't be left on by accident.
 
 | Touch Mode | Icon | What touches do |
 |---|---|---|
@@ -105,7 +105,7 @@ So more than one finger can only reach apps that read a multitouch protocol them
 
 **Multitouch Apps mode** sends every finger, up to ten, as TUIO 1.1 ("2Dcur" cursors) over UDP to `127.0.0.1:3333`. That's the default port of TUIO apps such as TouchDesigner, Processing, openFrameworks, Unity, Max and Kivy.
 - Nothing reaches macOS: no clicks and no gestures, so four fingers in your TUIO app won't open Mission Control. Use the trackpad for everything else while this mode is on.
-- While nothing touches, TouchBridge sends a frame once a second, as TUIO apps expect.
+- While nothing touches, TouchNext sends a frame once a second, as TUIO apps expect.
 
 **Testing.** ✋ → Open Event Sink opens a test window that paints touches:
 - in Multitouch mode, every finger in its own colour, marked with its touch number while it's down;
@@ -139,14 +139,14 @@ The upstream project's reference panel (ARZOPA 1920×1080, ILITEK `0x222A:0x0001
 
 Panels whose controllers use a different report layout than the ILITEK family still need the parser adapted. [Adapting to another touchscreen](#adapting-to-another-touchscreen) walks through each step.
 
-**WCH panels need an Input Mode unlock, then give full multitouch on macOS.** WCH controllers boot in single-touch mouse emulation and stream their digitizer interface — up to ten fingers, with every gesture in the table above — only after the host writes the Input Mode feature report, the same thing Windows does during enumeration and macOS never does. TouchBridge writes it at every panel attach. Two protocol details matter and were learned the hard way (ours, and the community's before it; confirmed against [Touch-Up issue #40](https://github.com/shueber/Touch-Up/issues/40), where this controller family multitouches on macOS 27): the feature payload goes out **without** the report ID in the buffer, and the write must happen **before** input reports are registered — afterwards the digitizer interface stays silent. Until the unlock lands (for example in the moment after a replug), TouchBridge reads the panel's single-touch mouse reports so the screen never goes dead, and the digitizer takes over automatically.
+**WCH panels need an Input Mode unlock, then give full multitouch on macOS.** WCH controllers boot in single-touch mouse emulation and stream their digitizer interface — up to ten fingers, with every gesture in the table above — only after the host writes the Input Mode feature report, the same thing Windows does during enumeration and macOS never does. TouchNext writes it at every panel attach. Two protocol details matter and were learned the hard way (ours, and the community's before it; confirmed against [Touch-Up issue #40](https://github.com/shueber/Touch-Up/issues/40), where this controller family multitouches on macOS 27): the feature payload goes out **without** the report ID in the buffer, and the write must happen **before** input reports are registered — afterwards the digitizer interface stays silent. Until the unlock lands (for example in the moment after a replug), TouchNext reads the panel's single-touch mouse reports so the screen never goes dead, and the digitizer takes over automatically.
 
 ## Requirements
 
-- **macOS 15 (Sequoia).** Developed on 15.7; other versions are untested. TouchBridge relies on undocumented event formats that can change between macOS releases (see [Caveats](#caveats)).
+- **macOS 15 (Sequoia).** Developed on 15.7; other versions are untested. TouchNext relies on undocumented event formats that can change between macOS releases (see [Caveats](#caveats)).
 - **An Apple silicon Mac.** Intel is untested.
 - **A Swift 6 toolchain** (Xcode 16 or later, or the matching command-line tools).
-- **No other touchscreen driver** running, such as UPDD or Touchscreen Gestures. They take the panel exclusively, and so does TouchBridge.
+- **No other touchscreen driver** running, such as UPDD or Touchscreen Gestures. They take the panel exclusively, and so does TouchNext.
 
 ## Install
 
@@ -160,23 +160,23 @@ Panels whose controllers use a different report layout than the ILITEK family st
 
 2. **Create a signing certificate (recommended, one time).** macOS ties the Accessibility permission to the app's signature. An ad-hoc signed build loses the permission every time you rebuild; a stable self-signed certificate keeps it.
    1. Open Keychain Access and choose Keychain Access → Certificate Assistant → Create a Certificate….
-   2. Enter the name `TouchBridge Dev`, choose Identity Type "Self-Signed Root" and Certificate Type "Code Signing", and create it.
+   2. Enter the name `TouchNext Dev`, choose Identity Type "Self-Signed Root" and Certificate Type "Code Signing", and create it.
 
-   To use a certificate with another name, set `TOUCHBRIDGE_SIGN_IDENTITY` when building. Without any certificate, the build falls back to ad-hoc signing and prints a warning.
+   To use a certificate with another name, set `TOUCHNEXT_SIGN_IDENTITY` when building. Without any certificate, the build falls back to ad-hoc signing and prints a warning.
 
 3. **Build and install.**
    ```bash
    ./scripts/install.sh
    ```
    This does four things:
-   - builds `build/TouchBridge.app`;
-   - copies it to `~/Applications/TouchBridge.app`;
+   - builds `build/TouchNext.app`;
+   - copies it to `~/Applications/TouchNext.app`;
    - turns on Start at Login;
    - starts it.
 
 4. **Grant permissions.**
-   1. Open System Settings → Privacy & Security → Accessibility and switch on TouchBridge. If macOS also asks for Input Monitoring, allow that too.
-   2. Restart TouchBridge, because macOS applies new permissions only to a freshly started app: choose ✋ → Quit TouchBridge, then open `~/Applications/TouchBridge.app` again.
+   1. Open System Settings → Privacy & Security → Accessibility and switch on TouchNext. If macOS also asks for Input Monitoring, allow that too.
+   2. Restart TouchNext, because macOS applies new permissions only to a freshly started app: choose ✋ → Quit TouchNext, then open `~/Applications/TouchNext.app` again.
 
 5. **Touch the screen.** The ✋ menu shows whether the panel and the touch display were found.
 
@@ -184,7 +184,7 @@ Panels whose controllers use a different report layout than the ILITEK family st
 
 ## The menu
 
-TouchBridge lives in the menu bar as ✋. Settings are saved across restarts, except Enabled and Dry Run, which reset at each start.
+TouchNext lives in the menu bar as ✋. Settings are saved across restarts, except Enabled and Dry Run, which reset at each start.
 
 | Item | What it does |
 |---|---|
@@ -202,9 +202,9 @@ TouchBridge lives in the menu bar as ✋. Settings are saved across restarts, ex
 | Return Focus to Previous App | After you tap an app on the touch display, gives focus back to the app you were using about 0.6 s later. Off by default: focus follows touch. |
 | Keep Focus When Switching Spaces | After a Space switch on the touch display, gives focus back to the app on the other screen (default on) |
 | Dry Run (log only) | Recognizes gestures and logs them without sending anything |
-| Start at Login | Runs TouchBridge at login and restarts it if it crashes. Quit from the menu stays quit until the next login. |
+| Start at Login | Runs TouchNext at login and restarts it if it crashes. Quit from the menu stays quit until the next login. |
 | Open Event Sink | A test window on the touch display. It logs every event it receives and paints touches: TUIO fingers in colour, the mouse in grey. |
-| Open Logs Folder | Opens `~/Library/Logs/TouchBridge/` |
+| Open Logs Folder | Opens `~/Library/Logs/TouchNext/` |
 
 ## How it works
 
@@ -214,7 +214,7 @@ touch panel ──HID──▶ ReportParser ─▶ ContactTracker ─▶ Gesture
                                                          scroll, pinch, …)                     events)
 ```
 
-**Taking the panel.** TouchBridge opens the touch panel with exclusive access (`kIOHIDOptionsTypeSeizeDevice`), so macOS stops turning touches into cursor movements. It reads the raw multitouch reports itself, parses each finger's position, and tracks contacts across frames. Panel coordinates are mapped onto the touch display's current bounds, updated live when displays are rearranged. Rotation is supported in the mapping but hasn't been tested on hardware.
+**Taking the panel.** TouchNext opens the touch panel with exclusive access (`kIOHIDOptionsTypeSeizeDevice`), so macOS stops turning touches into cursor movements. It reads the raw multitouch reports itself, parses each finger's position, and tracks contacts across frames. Panel coordinates are mapped onto the touch display's current bounds, updated live when displays are rearranged. Rotation is supported in the mapping but hasn't been tested on hardware.
 
 **Recognizing gestures.** `GestureRecognizer` is pure Swift with no system frameworks, and it is unit tested, including replays of a real panel recording. Nothing is sent until a gesture is classified. Two-finger gestures are classified by how the fingers move:
 - both the same way → scroll;
@@ -233,16 +233,16 @@ touch panel ──HID──▶ ReportParser ─▶ ContactTracker ─▶ Gesture
 - Space switching and Notification Center follow the cursor;
 - Launchpad follows the Dock.
 
-**Page swipes.** Each two-finger scroll from a real trackpad comes with a second, hidden stream of gesture events: type 29, subtype 61 at the start, subtype 6 for every movement, subtype 62 at the end. AppKit's swipe tracking (behind Safari's back/forward swipe) measures progress from that stream, not from the scroll events. TouchBridge sends the stream with two-finger scrolls, so apps animate the swipe natively.
+**Page swipes.** Each two-finger scroll from a real trackpad comes with a second, hidden stream of gesture events: type 29, subtype 61 at the start, subtype 6 for every movement, subtype 62 at the end. AppKit's swipe tracking (behind Safari's back/forward swipe) measures progress from that stream, not from the scroll events. TouchNext sends the stream with two-finger scrolls, so apps animate the swipe natively.
 
 **Touch modes.**
 - **Drawing:** a separate path in `GestureRecognizer`. The first finger becomes a pen, delivered as a Warp drag so the mouse button is really down system-wide. Everything else is dropped.
 - **Multitouch Apps:** gesture recognition is skipped entirely. Each frame of contacts becomes a TUIO bundle: `TUIOSessions` gives every touch its own session id and a velocity, and `TUIO.frame` builds the OSC bytes, sent over UDP.
 
 **Staying reliable.**
-- **Multitouch mode:** after unplugging or sleep, the panel starts in a single-touch "mouse" mode. TouchBridge switches it back to multitouch when it connects, and again whenever mouse-mode reports appear.
+- **Multitouch mode:** after unplugging or sleep, the panel starts in a single-touch "mouse" mode. TouchNext switches it back to multitouch when it connects, and again whenever mouse-mode reports appear.
 - **Stuck buttons:** every open press is journaled to disk, so a restart after a crash releases it where it was made.
-- **Login item:** a per-user launch agent starts TouchBridge at login and restarts it after a crash.
+- **Login item:** a per-user launch agent starts TouchNext at login and restarts it after a crash.
 
 The design history is in `docs/`, including findings, experiments that failed and why:
 - `docs/spec.md`: the original plan plus implementation notes;
@@ -256,13 +256,13 @@ You'll change a few constants and possibly the report parser, then rebuild.
    ```bash
    ioreg -p IOUSB -l -w0 | grep -E '"USB Product Name"|"idVendor"|"idProduct"'
    ```
-   TouchBridge logs the product name and USB IDs of whatever it seized.
+   TouchNext logs the product name and USB IDs of whatever it seized.
 
 2. **Record the panel's reports.** With nothing else holding the panel, build with `./scripts/bundle.sh`, then run:
    ```bash
-   open -n build/TouchBridge.app --args --probe 90
+   open -n build/TouchNext.app --args --probe 90
    ```
-   Touch with one, two and three fingers. `~/Library/Logs/TouchBridge/` gets the raw reports (`probe-*.jsonl`) and a summary.
+   Touch with one, two and three fingers. `~/Library/Logs/TouchNext/` gets the raw reports (`probe-*.jsonl`) and a summary.
 
 3. **Adapt the parser.** `Sources/TouchCore/ReportParser.swift` has one decoder per supported controller family: WCH (report ID `0x0D`; the JN-MD-IPST105FP) and ILITEK (report ID 4; the ARZOPA, with the slot count derived from the report length). For another format, read your panel's HID report descriptor:
    ```bash
@@ -272,7 +272,7 @@ You'll change a few constants and possibly the report parser, then rebuild.
 
 4. **Point it at your display.** With exactly one external display, nothing to do: the pipeline falls back to it when no EDID match is configured. To pin it exactly, run the read-only probe:
    ```bash
-   open -g -n build/TouchBridge.app --args --ax-probe --menubar
+   open -g -n build/TouchNext.app --args --ax-probe --menubar
    ```
    `axprobe.log` lists every display with its vendor and model numbers. Set `displayVendor` and `displayModel` in `PipelineSettings` (`Sources/TouchPlatform/InputPipeline.swift`). The self-test in `SystemUISelfTest.swift` uses the same numbers.
 
@@ -288,18 +288,18 @@ You'll change a few constants and possibly the report parser, then rebuild.
    ./scripts/install.sh
    ```
 
-Making all of this automatic would be the natural next step: parsing any standard HID multitouch panel from its descriptor (discovery and slot-count handling already are), a display picker in the menu, and the physical size from the display's EDID. If you adapt TouchBridge to another panel, please consider sharing the changes.
+Making all of this automatic would be the natural next step: parsing any standard HID multitouch panel from its descriptor (discovery and slot-count handling already are), a display picker in the menu, and the physical size from the display's EDID. If you adapt TouchNext to another panel, please consider sharing the changes.
 
 ## Logs and diagnostics
 
-Logs are in `~/Library/Logs/TouchBridge/`:
+Logs are in `~/Library/Logs/TouchNext/`:
 - `touchbridge.log`: every gesture, and how and where it was delivered;
 - `eventsink.log`: what the Event Sink test window received;
 - other files from the diagnostic modes below.
 
-Diagnostic modes run on the development build (`build/TouchBridge.app`, made by `./scripts/bundle.sh`). Most run next to the installed copy. The ones marked † need the panel, or the single running instance, so quit the installed copy first (✋ → Quit TouchBridge).
+Diagnostic modes run on the development build (`build/TouchNext.app`, made by `./scripts/bundle.sh`). Most run next to the installed copy. The ones marked † need the panel, or the single running instance, so quit the installed copy first (✋ → Quit TouchNext).
 
-| Command (`open -n build/TouchBridge.app --args …`) | What it does |
+| Command (`open -n build/TouchNext.app --args …`) | What it does |
 |---|---|
 | `--probe 90` † | Records raw panel reports for 90 s |
 | `--dry-run` † | Recognizes and logs gestures without sending anything |
@@ -316,14 +316,14 @@ Add `-g` after `open` to keep a diagnostic run in the background.
 ## Troubleshooting
 
 **Touching does nothing.**
-- Another touchscreen driver may be holding the panel. Quit or uninstall it, then use ✋ → Enabled, or restart TouchBridge.
+- Another touchscreen driver may be holding the panel. Quit or uninstall it, then use ✋ → Enabled, or restart TouchNext.
 - The ✋ status lines say whether the panel and the display were found.
 
-**Touches move the cursor, or land on the wrong screen.** TouchBridge isn't running or isn't enabled, so macOS is handling the panel itself.
+**Touches move the cursor, or land on the wrong screen.** TouchNext isn't running or isn't enabled, so macOS is handling the panel itself.
 
-**The panel is found but apps don't react.** Accessibility permission is missing, or was granted to a differently signed build. Switch it off and on again in System Settings → Privacy & Security → Accessibility, then restart TouchBridge.
+**The panel is found but apps don't react.** Accessibility permission is missing, or was granted to a differently signed build. Switch it off and on again in System Settings → Privacy & Security → Accessibility, then restart TouchNext.
 
-**Only one finger works after replugging.** TouchBridge asks the panel for multitouch mode automatically and logs it. If it persists, unplug the panel's USB cable and plug it back in.
+**Only one finger works after replugging.** TouchNext asks the panel for multitouch mode automatically and logs it. If it persists, unplug the panel's USB cable and plug it back in.
 
 **A gesture behaves differently from the trackpad.** Check "Follow Trackpad Settings" and the trackpad switches listed under it.
 
@@ -337,20 +337,20 @@ Add `-g` after `open` to keep a diagnostic run in the background.
 
 **Multitouch mode does nothing in my apps.** That's by design. In Multitouch mode fingers go only to apps that read TUIO, and nothing is delivered to macOS. Ordinary apps, web pages, and iPhone or iPad apps can't receive more than one finger on a Mac. Use the Event Sink to check that the fingers arrive.
 
-**A web page ignores touches completely.** It probably listens only for touch events, which browsers on a Mac never produce. TouchBridge reaches web pages as a mouse.
+**A web page ignores touches completely.** It probably listens only for touch events, which browsers on a Mac never produce. TouchNext reaches web pages as a mouse.
 
 ## Uninstall
 
-1. ✋ → turn off Start at Login, which removes the launch agent. Then ✋ → Quit TouchBridge.
-2. Move `~/Applications/TouchBridge.app` to the Trash.
-3. Optionally, remove TouchBridge's files and settings:
-   - `~/Library/Logs/TouchBridge/`
-   - `~/Library/Application Support/TouchBridge/`
+1. ✋ → turn off Start at Login, which removes the launch agent. Then ✋ → Quit TouchNext.
+2. Move `~/Applications/TouchNext.app` to the Trash.
+3. Optionally, remove TouchNext's files and settings:
+   - `~/Library/Logs/TouchNext/`
+   - `~/Library/Application Support/TouchNext/`
    - the saved settings, with this command:
      ```bash
-     defaults delete com.theofanis.touchbridge
+     defaults delete com.gramini.touchnext
      ```
-4. Remove TouchBridge from System Settings → Privacy & Security → Accessibility.
+4. Remove TouchNext from System Settings → Privacy & Security → Accessibility.
 
 ## Development
 
@@ -365,7 +365,7 @@ swift test
 ```
 
 - `swift test` runs the unit tests, the delivery tests and the replay of a real panel recording.
-- `./scripts/bundle.sh` builds and signs `build/TouchBridge.app` for development.
+- `./scripts/bundle.sh` builds and signs `build/TouchNext.app` for development.
 - `./scripts/install.sh` builds, installs to `~/Applications` and restarts the login item.
 - `CHANGELOG.md` lists the changes in each version.
 
@@ -373,13 +373,13 @@ swift test
 |---|---|
 | `Sources/TouchCore` | Pure Swift: report parser, contact tracker, coordinate mapping, gesture recognizer, delivery policy, focus and Dock logic. No system frameworks; fully unit tested. |
 | `Sources/TouchPlatform` | macOS I/O: HID input, displays and windows, event synthesis, Direct and Warp delivery, system gestures, diagnostics |
-| `Sources/TouchBridgeApp` | The menu-bar app: menu, saved settings, login item, Event Sink, probe |
+| `Sources/TouchNextApp` | The menu-bar app: menu, saved settings, login item, Event Sink, probe |
 | `Tests` | Unit tests and replays; `Tests/TouchCoreTests/Fixtures` holds the panel recording |
 | `docs` | The original plan with implementation notes (`spec.md`) and per-feature investigations (`backlog.md`) |
 
 ## Caveats
 
-- **Private APIs.** TouchBridge depends on undocumented CoreGraphics, SkyLight and IOKit behaviour:
+- **Private APIs.** TouchNext depends on undocumented CoreGraphics, SkyLight and IOKit behaviour:
   - event fields and gesture subtypes learned by observing real trackpad events;
   - a few private calls, looked up at runtime.
 

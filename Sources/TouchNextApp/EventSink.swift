@@ -17,7 +17,7 @@ final class EventSink: NSObject, NSApplicationDelegate {
         // Created *on* the touch screen: without `screen:` AppKit constrains the frame onto the main display.
         let frame = NSRect(x: screen.frame.width / 2 - 450, y: screen.frame.height / 2 - 300, width: 900, height: 600)
         window = NSWindow(contentRect: frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false, screen: screen)
-        window.title = "TouchBridge Event Sink"
+        window.title = "TouchNext Event Sink"
         window.isReleasedWhenClosed = false
 
         sink = SinkView(frame: NSRect(x: 0, y: 0, width: 900, height: 540), log: log, touchScreen: screen)
@@ -112,7 +112,7 @@ final class EventSink: NSObject, NSApplicationDelegate {
             let tag = event.cgEvent?.getIntegerValueField(.eventSourceUserData) == 0x5442_4752 ? " TOUCHBRIDGE" : ""
             var fields = ""
             // Raw fields of mouse-downs, the first and last event of each scroll gesture, and gesture events,
-            // to diff window-server-routed events against TouchBridge's.
+            // to diff window-server-routed events against TouchNext's.
             let scrollEdge = event.type == .scrollWheel && (event.phase == .began || event.phase == .ended || event.momentumPhase == .began)
             let gesture = [.gesture, .beginGesture, .endGesture, .swipe].contains(event.type)
             if event.type == .leftMouseDown || scrollEdge || gesture, let cg = event.cgEvent {

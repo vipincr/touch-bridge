@@ -56,7 +56,7 @@ private func readBundle(_ b: [UInt8]) -> [Message] {
     let messages = readBundle(TUIO.frame(cursors, sequence: 7))
     #expect(messages.allSatisfy { $0.address == "/tuio/2Dcur" })
     #expect(messages.map { $0.args.first } == [.s("source"), .s("alive"), .s("set"), .s("set"), .s("fseq")])
-    #expect(messages[0].args == [.s("source"), .s("TouchBridge")])
+    #expect(messages[0].args == [.s("source"), .s("TouchNext")])
     #expect(messages[1].args == [.s("alive"), .i(4), .i(9)])
     #expect(messages[2].args == [.s("set"), .i(4), .f(0.25), .f(0.5), .f(0.1), .f(-0.2), .f(0)])
     #expect(messages[4].args == [.s("fseq"), .i(7)])
@@ -64,7 +64,7 @@ private func readBundle(_ b: [UInt8]) -> [Message] {
 
 @Test func anEmptyFrameTellsClientsEveryCursorIsGone() {
     let messages = readBundle(TUIO.frame([], sequence: 8))
-    #expect(messages.map { $0.args } == [[.s("source"), .s("TouchBridge")], [.s("alive")], [.s("fseq"), .i(8)]])
+    #expect(messages.map { $0.args } == [[.s("source"), .s("TouchNext")], [.s("alive")], [.s("fseq"), .i(8)]])
 }
 
 private let ms: UInt64 = 1_000_000

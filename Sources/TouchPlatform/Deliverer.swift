@@ -383,7 +383,7 @@ final class Deliverer {
 final class PressJournal {
     private let url: URL
 
-    init(url: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Application Support/TouchBridge/press.json")) {
+    init(url: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Application Support/TouchNext/press.json")) {
         self.url = url
     }
 
@@ -403,7 +403,7 @@ final class PressJournal {
     }
 }
 
-/// Hides the cursor while TouchBridge is in the background, via a private CoreGraphics call looked up at runtime.
+/// Hides the cursor while TouchNext is in the background, via a private CoreGraphics call looked up at runtime.
 /// If the call is missing, the cursor simply stays visible during Warp gestures.
 enum CursorVisibility {
     private typealias DefaultConnection = @convention(c) () -> Int32

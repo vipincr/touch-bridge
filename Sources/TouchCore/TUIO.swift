@@ -66,7 +66,7 @@ public enum TUIO {
 
     /// One frame: who sends it, which cursors are alive (an empty list removes them all), one `set` per
     /// cursor, and the frame number.
-    public static func frame(_ cursors: [Cursor], sequence: Int32, source: String = "TouchBridge") -> [UInt8] {
+    public static func frame(_ cursors: [Cursor], sequence: Int32, source: String = "TouchNext") -> [UInt8] {
         var messages = [OSC.message(address, [.string("source"), .string(source)]),
                         OSC.message(address, [.string("alive")] + cursors.map { .int($0.session) })]
         for c in cursors {

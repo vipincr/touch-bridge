@@ -2,7 +2,7 @@ import Foundation
 import TouchCore
 import TouchPlatform
 
-/// Menu settings that survive restarts (UserDefaults of com.theofanis.touchbridge). "Enabled" and
+/// Menu settings that survive restarts (UserDefaults of com.gramini.touchnext). "Enabled" and
 /// "Dry Run" are deliberately per-session.
 struct StoredSettings: Sendable {
     var delivery: DeliveryMode?          // nil = automatic

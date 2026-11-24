@@ -33,7 +33,7 @@ public final class HIDTouchSource: @unchecked Sendable {
     static let inputModeDigitizer: UInt8 = 0x02
     static let reportBufferSize = 128
 
-    public let queue = DispatchQueue(label: "com.theofanis.touchbridge.hid", qos: .userInteractive)
+    public let queue = DispatchQueue(label: "com.gramini.touchnext.hid", qos: .userInteractive)
 
     /// (mach absolute timestamp, report bytes including the report ID at index 0)
     public var onReport: ((UInt64, [UInt8]) -> Void)?

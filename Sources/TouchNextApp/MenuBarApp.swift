@@ -7,7 +7,7 @@ import TouchPlatform
 @MainActor
 final class MenuBarApp: NSObject, NSApplicationDelegate {
     private let pipeline = InputPipeline()
-    private let log = FileLog(name: "touchbridge")
+    private let log = FileLog(name: "touchnext")
     private var statusItem: NSStatusItem!
     private let panelLine = NSMenuItem(title: "Panel: starting…", action: nil, keyEquivalent: "")
     private let displayLine = NSMenuItem(title: "Display: looking for the ARZOPA…", action: nil, keyEquivalent: "")
@@ -38,7 +38,7 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard SingleInstance.acquire() else {
-            log.write("another TouchBridge is already running; exiting")
+            log.write("another TouchNext is already running; exiting")
             NSApp.terminate(nil)
             return
         }
@@ -93,7 +93,7 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
 
     private func buildMenu() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "hand.point.up.left", accessibilityDescription: "TouchBridge")
+        statusItem.button?.image = NSImage(systemSymbolName: "hand.point.up.left", accessibilityDescription: "TouchNext")
         let menu = NSMenu()
         menu.autoenablesItems = false   // items greyed out while the trackpad settings decide
         for line in [panelLine, displayLine, gestureLine, touchesLine] {
@@ -181,7 +181,7 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
         _ = item(menu, "Open Event Sink", #selector(openEventSink))
         _ = item(menu, "Open Logs Folder", #selector(openLogs))
         menu.addItem(.separator())
-        _ = item(menu, "Quit TouchBridge", #selector(quit), key: "q")
+        _ = item(menu, "Quit TouchNext", #selector(quit), key: "q")
         statusItem.menu = menu
         refreshTrackpadItems()
     }
@@ -344,8 +344,8 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
         case .drawing: "pencil.tip"
         case .multitouch: "hand.raised.fingers.spread"
         }
-        statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "TouchBridge")
-            ?? NSImage(systemSymbolName: "hand.point.up.left", accessibilityDescription: "TouchBridge")
+        statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "TouchNext")
+            ?? NSImage(systemSymbolName: "hand.point.up.left", accessibilityDescription: "TouchNext")
         log.write("touch mode chosen: \(mode.rawValue)")
     }
 
@@ -460,12 +460,12 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
     }
 }
 
-/// Only one TouchBridge may own the panel; a lock file enforces it.
+/// Only one TouchNext may own the panel; a lock file enforces it.
 enum SingleInstance {
     nonisolated(unsafe) private static var descriptor: Int32 = -1
 
     static func acquire() -> Bool {
-        let dir = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Application Support/TouchBridge")
+        let dir = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Application Support/TouchNext")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         descriptor = open(dir.appending(path: "instance.lock").path, O_CREAT | O_RDWR, 0o600)
         return descriptor >= 0 && flock(descriptor, LOCK_EX | LOCK_NB) == 0
@@ -479,9 +479,9 @@ enum SingleInstance {
     }
 }
 
-/// Appends timestamped lines to ~/Library/Logs/TouchBridge/<name>.log.
+/// Appends timestamped lines to ~/Library/Logs/TouchNext/<name>.log.
 final class FileLog: @unchecked Sendable {
-    static let directory = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Logs/TouchBridge")
+    static let directory = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Logs/TouchNext")
     private let url: URL
     private let lock = NSLock()
 

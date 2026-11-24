@@ -1,0 +1,10 @@
+[package]
+name = "touchnext"
+description = "Touch-panel driver daemon: seizes the panel, unlocks digitizer mode, and forwards every finger as TUIO (or probes the raw stream)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+touchcore = { path = "../touchcore" }
+touchhid = { path = "../touchhid" }

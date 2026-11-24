@@ -2,13 +2,13 @@ import AppKit
 import CoreGraphics
 import TouchCore
 
-/// Diagnostic for Direct delivery: posts events straight to the Event Sink (another TouchBridge
+/// Diagnostic for Direct delivery: posts events straight to the Event Sink (another TouchNext
 /// instance) via DirectTarget, first while the sink is inactive (Finder frontmost), then while it
 /// is active. Only ever targets our own Event Sink.
 public enum DirectSelfTest {
     public static func run(log: @escaping (String) -> Void) {
         let me = ProcessInfo.processInfo.processIdentifier
-        guard let sink = WindowLocator.onScreenWindows().first(where: { $0.ownerName == "TouchBridge" && $0.pid != me && $0.layer == 0 && $0.bounds.width >= 400 }) else {
+        guard let sink = WindowLocator.onScreenWindows().first(where: { $0.ownerName == "TouchNext" && $0.pid != me && $0.layer == 0 && $0.bounds.width >= 400 }) else {
             log("no Event Sink window found; open it first (menu → Open Event Sink)")
             return
         }

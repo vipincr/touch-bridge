@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "TouchBridge",
+    name: "TouchNext",
     platforms: [.macOS(.v14)],
     targets: [
         .target(name: "TouchCore"),
         .target(name: "TouchPlatform", dependencies: ["TouchCore"]),
-        .executableTarget(name: "TouchBridgeApp", dependencies: ["TouchCore", "TouchPlatform"]),
+        .executableTarget(name: "TouchNextApp", dependencies: ["TouchCore", "TouchPlatform"]),
         .testTarget(name: "TouchCoreTests", dependencies: ["TouchCore"], resources: [.copy("Fixtures")]),
         .testTarget(name: "TouchPlatformTests", dependencies: ["TouchPlatform", "TouchCore"]),
     ]

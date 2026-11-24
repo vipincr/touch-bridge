@@ -7,7 +7,7 @@
   ten 5-byte slots with the contact id in the high nibble and the tip switch at bit 0, scan time
   LE16 and contact count at bytes 51/53 — all taken from the panel's live HID report descriptor.
 - **WCH panels give full multitouch on macOS once unlocked.** The controller boots in
-  single-touch mouse emulation; TouchBridge writes the Input Mode feature (report 0x21,
+  single-touch mouse emulation; TouchNext writes the Input Mode feature (report 0x21,
   payload `[2, 0]` without the report ID in the buffer, before input reports are registered —
   the ordering and buffer shape are the whole trick, per Touch-Up issue #40) at every panel
   attach, and the digitizer interface streams up to ten fingers with every gesture. The panel's
@@ -101,9 +101,9 @@ No functional changes since 0.6.4.
 
 ## 0.2.0
 
-- **Start at Login**: a per-user launch agent that starts TouchBridge at login and restarts it after a crash.
+- **Start at Login**: a per-user launch agent that starts TouchNext at login and restarts it after a crash.
 - `scripts/install.sh` installs and updates the copy in `~/Applications`.
-- **Multitouch after replug and sleep.** The panel then starts in single-touch "mouse" mode; TouchBridge reads its feature reports to switch it back, as Linux's hid-multitouch driver does.
+- **Multitouch after replug and sleep.** The panel then starts in single-touch "mouse" mode; TouchNext reads its feature reports to switch it back, as Linux's hid-multitouch driver does.
 
 ## 0.1.0
 

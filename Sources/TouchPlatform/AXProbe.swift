@@ -14,7 +14,7 @@ public enum AXProbe {
         }
         let system = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(system, 0.3)
-        let windows = WindowLocator.onScreenWindows().filter { $0.layer == 0 && $0.bounds.width > 300 && $0.bounds.height > 200 && $0.ownerName != "TouchBridge" }
+        let windows = WindowLocator.onScreenWindows().filter { $0.layer == 0 && $0.bounds.width > 300 && $0.bounds.height > 200 && $0.ownerName != "TouchNext" }
         for w in windows.prefix(8) {
             log("window \(w.ownerName) #\(w.number) at \(Int(w.bounds.x)),\(Int(w.bounds.y)) \(Int(w.bounds.width))×\(Int(w.bounds.height))")
             for dy in [4.0, 12, 20, 27, 32, 38, 45, 52, 60, 75, 95] {
@@ -46,7 +46,7 @@ public enum AXProbe {
     private static func map(log: (String) -> Void) {
         let windows = WindowLocator.onScreenWindows()
         let apps = AppDirectory()   // same Chromium rule as the pipeline
-        for w in windows.filter({ $0.layer == 0 && $0.bounds.width > 300 && $0.bounds.height > 200 && $0.ownerName != "TouchBridge" }).prefix(8) {
+        for w in windows.filter({ $0.layer == 0 && $0.bounds.width > 300 && $0.bounds.height > 200 && $0.ownerName != "TouchNext" }).prefix(8) {
             log("window \(w.ownerName) #\(w.number) at \(Int(w.bounds.x)),\(Int(w.bounds.y)) \(Int(w.bounds.width))×\(Int(w.bounds.height))   (columns = 5%…95% of width)")
             for dy in stride(from: 2.0, through: 110, by: 6) {
                 let row = stride(from: 0.05, through: 0.951, by: 0.05).map { fx -> String in

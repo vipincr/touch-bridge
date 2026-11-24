@@ -21,7 +21,7 @@ final class Probe {
     }
 
     func run() -> Never {
-        recorder.log("TouchBridge probe, \(Int(duration)) s; raw reports → \(recorder.reportsURL.path)")
+        recorder.log("TouchNext probe, \(Int(duration)) s; raw reports → \(recorder.reportsURL.path)")
         checkPermissions()
         logDisplays()
         installSignalHandlers()
@@ -114,7 +114,7 @@ final class Probe {
 
 /// Owns the probe's files and statistics. Report recording happens only on the HID queue.
 final class ProbeRecorder: @unchecked Sendable {
-    static let logDirectory = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Logs/TouchBridge")
+    static let logDirectory = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Logs/TouchNext")
 
     let reportsURL: URL
     private let logURL: URL

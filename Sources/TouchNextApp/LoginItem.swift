@@ -2,16 +2,16 @@ import AppKit
 import ServiceManagement
 
 /// "Start at Login": a classic per-user launch agent (~/Library/LaunchAgents) that runs the installed
-/// app's executable by path. launchd starts TouchBridge at login and restarts it after a crash; a normal
+/// app's executable by path. launchd starts TouchNext at login and restarts it after a crash; a normal
 /// Quit (exit 0) stays quit until the next login.
 ///
 /// Not SMAppService: it pins the exact build it registered (bundle identity and code signature), so every
 /// rebuild of this self-signed app broke the login item (2026-10-10, see ledger).
 @MainActor
 enum LoginItem {
-    static let label = "com.theofanis.touchbridge.agent"
+    static let label = "com.gramini.touchnext.agent"
     /// The earlier SMAppService registration (bundle plist), removed on startup if still present.
-    private static let legacyPlistName = "com.theofanis.touchbridge.plist"
+    private static let legacyPlistName = "com.gramini.touchnext.plist"
 
     static var plistURL: URL {
         FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/LaunchAgents/\(label).plist")

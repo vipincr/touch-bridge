@@ -1,0 +1,6 @@
+[package]
+name = "touchcore"
+description = "Portable touch-panel core: HID report decoders (WCH, ILITEK), contact tracking, mode watch, coordinate mapping and TUIO framing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true

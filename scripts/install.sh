@@ -1,27 +1,27 @@
 #!/bin/zsh
-# Builds TouchBridge and installs it as the copy you use daily: ~/Applications/TouchBridge.app.
+# Builds TouchNext and installs it as the copy you use daily: ~/Applications/TouchNext.app.
 # Rebuilding in the project folder never touches that copy; run this script to update it.
 #
-# "Start at Login" is a per-user launch agent (~/Library/LaunchAgents/com.theofanis.touchbridge.agent.plist)
+# "Start at Login" is a per-user launch agent (~/Library/LaunchAgents/com.gramini.touchnext.agent.plist)
 # that runs the installed executable by path, so updating the app in place keeps it working.
 # The first install turns it on (the app writes the agent itself).
 set -euo pipefail
 
 cd "${0:A:h}/.."
-DEST="$HOME/Applications/TouchBridge.app"
-LABEL="com.theofanis.touchbridge.agent"
+DEST="$HOME/Applications/TouchNext.app"
+LABEL="com.gramini.touchnext.agent"
 AGENT="$HOME/Library/LaunchAgents/$LABEL.plist"
 JOB="gui/$(id -u)/$LABEL"
 
 ./scripts/bundle.sh
 
-# Quit every running TouchBridge (a normal Quit: the agent does not restart it), so the panel is free.
-pkill -TERM -x TouchBridge || true
-for _ in {1..40}; do pgrep -x TouchBridge >/dev/null || break; sleep 0.25; done
-if pgrep -x TouchBridge >/dev/null; then echo "TouchBridge did not quit; aborting." >&2; exit 1; fi
+# Quit every running TouchNext (a normal Quit: the agent does not restart it), so the panel is free.
+pkill -TERM -x TouchNext || true
+for _ in {1..40}; do pgrep -x TouchNext >/dev/null || break; sleep 0.25; done
+if pgrep -x TouchNext >/dev/null; then echo "TouchNext did not quit; aborting." >&2; exit 1; fi
 
 mkdir -p "$DEST"
-rsync -a --delete build/TouchBridge.app/ "$DEST/"
+rsync -a --delete build/TouchNext.app/ "$DEST/"
 codesign --verify "$DEST"
 
 if [[ -f "$AGENT" ]]; then

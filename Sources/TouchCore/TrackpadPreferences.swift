@@ -1,5 +1,5 @@
 /// The Mac's trackpad gesture settings (defaults domain com.apple.AppleMultitouchTrackpad), so the
-/// touchscreen can behave like the trackpad. Gestures TouchBridge doesn't implement yet are read too.
+/// touchscreen can behave like the trackpad. Gestures TouchNext doesn't implement yet are read too.
 public struct TrackpadPreferences: Equatable, Sendable {
     public var threeFingerDrag = false   // macOS default: off
     public var scroll = true
@@ -59,7 +59,7 @@ public struct TrackpadPreferences: Equatable, Sendable {
     }
 
     /// One line for the menu and the log.
-    /// The settings TouchBridge follows, in menu order.
+    /// The settings TouchNext follows, in menu order.
     public var settings: [(name: String, on: Bool)] {
         [("3-finger drag", threeFingerDrag), ("scroll", scroll), ("momentum", momentum), ("pinch", pinch), ("rotate", rotate),
          ("Mission Control", missionControlSwipe), ("Spaces", spacesSwipe), ("Launchpad/Desktop", launchpadDesktopPinch),

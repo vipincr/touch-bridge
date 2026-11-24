@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-/// Builds the synthetic CGEvents TouchBridge posts. Field numbers are from CGEventTypes.h unless marked private.
+/// Builds the synthetic CGEvents TouchNext posts. Field numbers are from CGEventTypes.h unless marked private.
 enum EventSynth {
     /// Written to kCGEventSourceUserData (field 42) so our own events can be recognised ("TBGR").
     static let tag: Int64 = 0x5442_4752

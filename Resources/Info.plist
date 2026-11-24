@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>TouchBridge</string>
+	<string>TouchNext</string>
 	<key>CFBundleExecutable</key>
-	<string>TouchBridge</string>
+	<string>TouchNext</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.theofanis.touchbridge</string>
+	<string>com.gramini.touchnext</string>
 	<key>CFBundleName</key>
-	<string>TouchBridge</string>
+	<string>TouchNext</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

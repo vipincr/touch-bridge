@@ -292,7 +292,7 @@ private let journaledDirect = PressRecord(pid: 42, right: false, x: 2500, y: 500
 }
 
 @Test func theJournalRoundTripsAPressAndReadsTheOldFormat() throws {
-    let url = FileManager.default.temporaryDirectory.appending(path: "touchbridge-journal-\(UUID().uuidString).json")
+    let url = FileManager.default.temporaryDirectory.appending(path: "touchnext-journal-\(UUID().uuidString).json")
     defer { try? FileManager.default.removeItem(at: url) }
     let journal = PressJournal(url: url)
     journal.record(journaledDirect)

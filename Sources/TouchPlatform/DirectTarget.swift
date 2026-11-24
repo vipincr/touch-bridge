@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 import TouchCore
 
-/// A window that receives events straight from TouchBridge (Direct delivery), without the cursor moving.
+/// A window that receives events straight from TouchNext (Direct delivery), without the cursor moving.
 ///
 /// CGEventPostToPid alone delivers events with no window attached (AppKit sees windowNumber 0 and
 /// drops them). The window server normally fills in two things when it routes an event, and we do the same:
