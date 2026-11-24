@@ -125,7 +125,7 @@ The top line shows fingers now and the most at once. Clear wipes the canvas.
 | | |
 |---|---|
 | Touch monitor | JAPANNEXT **JN-MD-IPST105FP**, 10.5-inch IPS, 1920×1280, 5-point touch |
-| Touch controller | WCH (wch.cn) `0x27C0:0x0859` — **full multitouch** after the Input Mode unlock, see the note below; ILITEK `0x222A:0x0001` unchanged |
+| Touch controller | WCH (wch.cn) `0x27C0:0x0859` — declares ten-finger multitouch, not yet received on macOS, see the note below; ILITEK `0x222A:0x0001` unchanged |
 | Mac | MacBook Pro (Apple silicon), macOS 26 |
 
 The upstream project's reference panel (ARZOPA 1920×1080, ILITEK `0x222A:0x0001`, 10 contacts) keeps working through the same code paths.
@@ -139,7 +139,7 @@ The upstream project's reference panel (ARZOPA 1920×1080, ILITEK `0x222A:0x0001
 
 Panels whose controllers use a different report layout than the ILITEK family still need the parser adapted. [Adapting to another touchscreen](#adapting-to-another-touchscreen) walks through each step.
 
-**WCH panels need an Input Mode unlock, then give full multitouch on macOS.** WCH controllers boot in single-touch mouse emulation and stream their digitizer interface — up to ten fingers, with every gesture in the table above — only after the host writes the Input Mode feature report, the same thing Windows does during enumeration and macOS never does. TouchNext writes it at every panel attach. Two protocol details matter and were learned the hard way (ours, and the community's before it; confirmed against [Touch-Up issue #40](https://github.com/shueber/Touch-Up/issues/40), where this controller family multitouches on macOS 27): the feature payload goes out **without** the report ID in the buffer, and the write must happen **before** input reports are registered — afterwards the digitizer interface stays silent. Until the unlock lands (for example in the moment after a replug), TouchNext reads the panel's single-touch mouse reports so the screen never goes dead, and the digitizer takes over automatically.
+**The WCH panel declares full multitouch, but TouchNext has not yet received it on macOS.** The controller's HID report descriptor (read from the registry) declares a ten-finger digitizer report, and it answers a feature read with a maximum of 15 contacts, so the hardware is multitouch. Windows gets those reports after an Input Mode feature write. TouchNext sends the same write, the panel accepts it, and it still sends only single-touch mouse reports: measured over several sessions on 2026-11-24, thousands of mouse frames and no digitizer frames. Until that is solved, TouchNext reads the single-touch mouse reports, so taps are approximate, drags can stutter, and no multi-finger gesture works. The community reports of multitouch after this write ([Touch-Up issue #40](https://github.com/shueber/Touch-Up/issues/40)) concern the sibling controller `0x0858`, not this one.
 
 ## Requirements
 
@@ -240,7 +240,7 @@ touch panel ──HID──▶ ReportParser ─▶ ContactTracker ─▶ Gesture
 - **Multitouch Apps:** gesture recognition is skipped entirely. Each frame of contacts becomes a TUIO bundle: `TUIOSessions` gives every touch its own session id and a velocity, and `TUIO.frame` builds the OSC bytes, sent over UDP.
 
 **Staying reliable.**
-- **Multitouch mode:** after unplugging or sleep, the panel starts in a single-touch "mouse" mode. TouchNext switches it back to multitouch when it connects, and again whenever mouse-mode reports appear.
+- **Multitouch mode:** TouchNext asks the panel for multitouch when it connects and again whenever single-touch (mouse-mode) reports appear. On the WCH `0x0859` panel the request is accepted but not honoured yet (see the hardware note).
 - **Stuck buttons:** every open press is journaled to disk, so a restart after a crash releases it where it was made.
 - **Login item:** a per-user launch agent starts TouchNext at login and restarts it after a crash.
 
@@ -278,7 +278,7 @@ You'll change a few constants and possibly the report parser, then rebuild.
 
 5. **Set the physical size.** Set `panelWidthMm` and `panelHeightMm` in `PipelineSettings` (`Sources/TouchPlatform/InputPipeline.swift`) to the panel's active area. Gesture thresholds are in millimetres.
 
-6. **Check the multitouch switch.** The ILITEK panel needs feature reports 2 and 6 read before it leaves single-touch mode (`requestMultitouchMode` in `HIDTouchSource.swift`); this happens automatically for ILITEK controllers only. WCH controllers need nothing (their standard Input Mode feature defaults to digitizer mode).
+6. **Check the multitouch switch.** The ILITEK panel needs feature reports 2 and 6 read before it leaves single-touch mode (`requestMultitouchMode` in `HIDTouchSource.swift`); this happens automatically for ILITEK controllers only. WCH controllers take the Input Mode write TouchNext already sends.
 
 7. **Test and install.**
    ```bash
@@ -323,7 +323,7 @@ Add `-g` after `open` to keep a diagnostic run in the background.
 
 **The panel is found but apps don't react.** Accessibility permission is missing, or was granted to a differently signed build. Switch it off and on again in System Settings → Privacy & Security → Accessibility, then restart TouchNext.
 
-**Only one finger works after replugging.** TouchNext asks the panel for multitouch mode automatically and logs it. If it persists, unplug the panel's USB cable and plug it back in.
+**Only one finger works.** On the WCH `0x27C0:0x0859` panel that is the current state: see the hardware note. Replugging does not change it.
 
 **A gesture behaves differently from the trackpad.** Check "Follow Trackpad Settings" and the trackpad switches listed under it.
 
