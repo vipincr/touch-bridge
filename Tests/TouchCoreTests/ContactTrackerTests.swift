@@ -27,14 +27,14 @@ private let ms: UInt64 = 1_000_000
 }
 
 @Test func tipOffEndsTheContact() {
-    var tracker = ContactTracker()
+    var tracker = ContactTracker(debounceNs: 0)
     _ = tracker.update(frame([(1, true, 0.2, 0.3)]), atNs: 0)
     #expect(tracker.update(frame([(1, false, 0.21, 0.3)]), atNs: 8 * ms) == [ContactEvent(id: 1, phase: .ended, x: 0.21, y: 0.3)])
     #expect(tracker.activeCount == 0)
 }
 
 @Test func contactMissingFromFrameEndsAtItsLastPosition() {
-    var tracker = ContactTracker()
+    var tracker = ContactTracker(debounceNs: 0)
     _ = tracker.update(frame([(1, true, 0.2, 0.3), (2, true, 0.6, 0.6)]), atNs: 0)
     let events = tracker.update(frame([(2, true, 0.6, 0.6)]), atNs: 8 * ms)
     #expect(events == [ContactEvent(id: 1, phase: .ended, x: 0.2, y: 0.3)])
@@ -55,7 +55,7 @@ private let ms: UInt64 = 1_000_000
 }
 
 @Test func eventsAreOrderedEndedThenBeganThenMoved() {
-    var tracker = ContactTracker()
+    var tracker = ContactTracker(debounceNs: 0)
     _ = tracker.update(frame([(1, true, 0.1, 0.1), (2, true, 0.5, 0.5)]), atNs: 0)
     let events = tracker.update(frame([(2, true, 0.55, 0.5), (3, true, 0.9, 0.9)]), atNs: 8 * ms)
     #expect(events.map(\.phase) == [.ended, .began, .moved])
@@ -64,7 +64,7 @@ private let ms: UInt64 = 1_000_000
 
 // Owner requirement (2026-10-09): able to watch up to 10 fingers (future painting apps / games).
 @Test func tracksTenSimultaneousFingersThroughTheirWholeLifecycle() {
-    var tracker = ContactTracker()
+    var tracker = ContactTracker(debounceNs: 0)
     let down = (0..<10).map { (UInt8($0), true, 0.05 + Double($0) * 0.09, 0.5) }
     let began = tracker.update(frame(down), atNs: 0)
     #expect(began.filter { $0.phase == .began }.count == 10)
@@ -75,5 +75,27 @@ private let ms: UInt64 = 1_000_000
 
     let lifted = tracker.update(frame(down.map { ($0.0, false, $0.2, 0.6) }), atNs: 16 * ms)
     #expect(lifted.filter { $0.phase == .ended }.count == 10)
+    #expect(tracker.activeCount == 0)
+}
+
+
+// MARK: lift debounce (WCH contacts flap during a press or lift)
+
+@Test func aTipFlapContinuesTheContactInsteadOfEndingAndBeginning() {
+    var tracker = ContactTracker()
+    _ = tracker.update(frame([(1, true, 0.2, 0.3)]), atNs: 0)
+    // Tip off, back on 35 ms later at a drifted position: one contact, a move — no ghost tap.
+    _ = tracker.update(frame([(1, false, 0.21, 0.3)]), atNs: 10 * ms)
+    let events = tracker.update(frame([(1, true, 0.22, 0.3)]), atNs: 45 * ms)
+    #expect(events == [ContactEvent(id: 1, phase: .moved, x: 0.22, y: 0.3)])
+    #expect(tracker.activeCount == 1)
+}
+
+@Test func aRealLiftIsBelievedAfterTheDebounceWindow() {
+    var tracker = ContactTracker()
+    _ = tracker.update(frame([(1, true, 0.2, 0.3)]), atNs: 0)
+    #expect(tracker.update(frame([(1, false, 0.21, 0.3)]), atNs: 10 * ms).isEmpty)
+    #expect(tracker.update(frame([]), atNs: 50 * ms).isEmpty)
+    #expect(tracker.update(frame([]), atNs: 80 * ms) == [ContactEvent(id: 1, phase: .ended, x: 0.21, y: 0.3)])
     #expect(tracker.activeCount == 0)
 }

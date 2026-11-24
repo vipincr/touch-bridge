@@ -36,12 +36,12 @@ private struct Script {
     #expect(s.actions == [.tap(at: PanelPoint(x: 0.5, y: 0.5), count: 1)])
 }
 
-@Test func jitterBelowTheSlopIsStillATapAtTheTouchDownPoint() {
+@Test func jitterBelowTheSlopIsStillATapAtTheRestingPoint() {
     var s = Script()
     s.at(0, began(0, 0.5, 0.5))
     s.at(30, moved(0, 0.5 + mmX(2), 0.5))
     s.at(60, ended(0, 0.5 + mmX(2), 0.5))
-    #expect(s.actions == [.tap(at: PanelPoint(x: 0.5, y: 0.5), count: 1)])
+    #expect(s.actions == [.tap(at: PanelPoint(x: 0.5 + mmX(2), y: 0.5), count: 1)])
 }
 
 @Test func secondAndThirdTapNearbyCountUpAndSnapToTheFirstTap() {
@@ -67,27 +67,27 @@ private struct Script {
     s.at(700, moved(0, 0.4 + mmX(1), 0.4))
     #expect(s.actions.isEmpty)
     s.at(900, ended(0, 0.4 + mmX(1), 0.4))
-    #expect(s.actions == [.rightClick(at: PanelPoint(x: 0.4, y: 0.4))])
+    #expect(s.actions == [.rightClick(at: PanelPoint(x: 0.4 + mmX(1), y: 0.4))])
 }
 
 @Test func movingBeyondTheSlopEarlyStartsADragFromTheTouchDownPoint() {
     var s = Script()
     s.at(0, began(0, 0.3, 0.3))
-    s.at(50, moved(0, 0.3 + mmX(5), 0.3))
-    s.at(70, moved(0, 0.3 + mmX(10), 0.3))
-    s.at(90, ended(0, 0.3 + mmX(10), 0.3))
+    s.at(50, moved(0, 0.3 + mmX(12), 0.3))
+    s.at(70, moved(0, 0.3 + mmX(20), 0.3))
+    s.at(90, ended(0, 0.3 + mmX(20), 0.3))
     #expect(s.actions == [
         .dragBegan(at: PanelPoint(x: 0.3, y: 0.3), hold: false),
-        .dragMoved(to: PanelPoint(x: 0.3 + mmX(5), y: 0.3)),
-        .dragMoved(to: PanelPoint(x: 0.3 + mmX(10), y: 0.3)),
-        .dragEnded(at: PanelPoint(x: 0.3 + mmX(10), y: 0.3)),
+        .dragMoved(to: PanelPoint(x: 0.3 + mmX(12), y: 0.3)),
+        .dragMoved(to: PanelPoint(x: 0.3 + mmX(20), y: 0.3)),
+        .dragEnded(at: PanelPoint(x: 0.3 + mmX(20), y: 0.3)),
     ])
 }
 
 @Test func holdThenMoveIsAHoldDrag() {
     var s = Script()
     s.at(0, began(0, 0.3, 0.3))
-    s.at(600, moved(0, 0.3 + mmX(5), 0.3))
+    s.at(600, moved(0, 0.3 + mmX(20), 0.3))
     #expect(s.actions.first == .dragBegan(at: PanelPoint(x: 0.3, y: 0.3), hold: true))
 }
 
@@ -149,7 +149,7 @@ private struct Script {
     var s = Script()
     s.at(0, began(0, 0.3, 0.3))
     s.at(300, began(1, 0.6, 0.6))
-    s.at(320, moved(0, 0.3 + mmX(6), 0.3))
+    s.at(320, moved(0, 0.3 + mmX(16), 0.3))
     #expect(s.actions.first == .dragBegan(at: PanelPoint(x: 0.3, y: 0.3), hold: false))
 }
 
@@ -171,9 +171,9 @@ private struct Script {
 @Test func morethanThreeFingersCancelsAnActiveDragAndIgnoresTheRest() {
     var s = Script()
     s.at(0, began(0, 0.3, 0.3))
-    s.at(50, moved(0, 0.3 + mmX(6), 0.3))
+    s.at(50, moved(0, 0.3 + mmX(12), 0.3))
     s.at(60, began(1, 0.5, 0.5), began(2, 0.6, 0.6), began(3, 0.7, 0.7))
-    #expect(s.actions.last == .dragEnded(at: PanelPoint(x: 0.3 + mmX(6), y: 0.3)))
+    #expect(s.actions.last == .dragEnded(at: PanelPoint(x: 0.3 + mmX(12), y: 0.3)))
     let count = s.actions.count
     s.at(80, moved(0, 0.3 + mmX(20), 0.3))
     s.at(90, ended(0, 0.3, 0.3), ended(1, 0.5, 0.5), ended(2, 0.6, 0.6), ended(3, 0.7, 0.7))
@@ -215,10 +215,11 @@ private struct Script {
     var s = Script(oneFingerDrag: .scroll)
     s.at(0, began(0, 0.5, 0.5))
     s.at(30, moved(0, 0.5, 0.5 + mmY(5)))
-    s.at(40, moved(0, 0.5, 0.5 + mmY(9)))
-    s.at(50, ended(0, 0.5, 0.5 + mmY(9)))
+    s.at(40, moved(0, 0.5, 0.5 + mmY(12)))
+    s.at(50, moved(0, 0.5, 0.5 + mmY(16)))
+    s.at(60, ended(0, 0.5, 0.5 + mmY(16)))
     guard case let .scroll(_, dy0, .began) = s.actions.first else { Issue.record("expected scroll began, got \(s.actions)"); return }
-    #expect(abs(dy0 - mmY(5)) < 1e-9, "the began event carries the movement since touch-down")
+    #expect(abs(dy0 - mmY(12)) < 1e-9, "the began event carries the movement since touch-down")
     guard case let .scroll(_, dy1, .changed) = s.actions[1] else { Issue.record("expected scroll changed"); return }
     #expect(abs(dy1 - mmY(4)) < 1e-9)
     guard case let .scrollEnded(_, vy) = try #require(s.actions.last) else { Issue.record("expected scrollEnded"); return }
@@ -228,7 +229,7 @@ private struct Script {
 @Test func inScrollModeHoldThenMoveIsStillClickAndDrag() {
     var s = Script(oneFingerDrag: .scroll)
     s.at(0, began(0, 0.3, 0.3))
-    s.at(600, moved(0, 0.3 + mmX(5), 0.3))
+    s.at(600, moved(0, 0.3 + mmX(20), 0.3))
     #expect(s.actions.first == .dragBegan(at: PanelPoint(x: 0.3, y: 0.3), hold: true))
 }
 
@@ -236,7 +237,7 @@ private struct Script {
     var s = Script(oneFingerDrag: .scroll)
     s.recognizer.dragZone = { _ in true }
     s.at(0, began(0, 0.3, 0.3))
-    s.at(50, moved(0, 0.3 + mmX(5), 0.3))
+    s.at(50, moved(0, 0.3 + mmX(12), 0.3))
     #expect(s.actions.first == .dragBegan(at: PanelPoint(x: 0.3, y: 0.3), hold: false))
 }
 
@@ -581,4 +582,19 @@ private let fourStart: [(Double, Double)] = [(0.4, 0.5), (0.45, 0.5), (0.5, 0.5)
     s.at(70, moved(0, x - mmX(16), 0.40), moved(1, x - mmX(9), 0.47))
     #expect(s.actions.contains(.notificationCenter))
     #expect(!s.actions.contains { if case .rotate = $0 { true } else { false } })
+}
+
+
+// MARK: long-press with drift
+
+@Test func aLongPressThatDriftsSlowlyStillRightClicks() {
+    var s = Script()
+    s.at(0, began(0, 0.4, 0.4))
+    // 4 mm of drift per 400 ms: 10 mm/s, exactly the tolerated rate, for a full second.
+    s.at(400, moved(0, 0.4 + mmX(4), 0.4))
+    s.at(800, moved(0, 0.4 + mmX(8), 0.4))
+    s.at(1200, moved(0, 0.4 + mmX(12), 0.4))
+    #expect(s.actions.isEmpty, "slow drift stays a stationary hold")
+    s.at(1250, ended(0, 0.4 + mmX(12), 0.4))
+    #expect(s.actions == [.rightClick(at: PanelPoint(x: 0.4 + mmX(12), y: 0.4))])
 }

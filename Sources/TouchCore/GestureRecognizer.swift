@@ -111,6 +111,14 @@ public struct GestureConfig: Codable, Equatable, Sendable {
     public var panelWidthMm = 309.3
     public var panelHeightMm = 173.9
     public var tapSlopMm = 3.0
+    /// Travel that still counts as a stationary finger: taps and long-presses are decided inside
+    /// this radius (touch slop), so settling wobble on glass doesn't turn a hold into a drag.
+    /// Classification of a scroll or drag needs travel beyond it.
+    public var holdSlopMm = 8.0
+    /// The stationary radius grows with hold time at this rate, so a long press tolerates the
+    /// finger's slow drift while a deliberate swipe (an order of magnitude faster) still
+    /// classifies within a fraction of a second.
+    public var holdDriftMmPerS = 10.0
     public var doubleTapRadiusMm = 8.0
     public var doubleTapIntervalNs: UInt64 = 500_000_000
     public var longPressNs: UInt64 = 500_000_000
@@ -321,7 +329,7 @@ public struct GestureRecognizer: Sendable {
                 return []
             }
             switch event.phase {
-            case .moved where distanceMm(point, origin) > config.tapSlopMm:
+            case .moved where distanceMm(point, origin) > config.holdSlopMm + Double(now - downNs) / 1e9 * config.holdDriftMmPerS:
                 // A click-and-drag needs a still finger first: the linger before the first real
                 // movement separates hold-drag from a slow natural swipe, which scrolls.
                 let firstMove = firstMoveNs ?? now
@@ -337,8 +345,10 @@ public struct GestureRecognizer: Sendable {
                 state = .oneFinger(id: id, downNs: downNs, origin: origin, current: point, firstMoveNs: firstMove)
                 return []
             case .ended:
+                // Taps and long-presses land where the finger rested, not where it first touched:
+                // touchdown wobbles on glass, the resting point is what the user aimed.
                 state = active.isEmpty ? .idle : .ignoring
-                return now - downNs >= config.longPressNs ? [.rightClick(at: origin)] : [tap(at: origin, now)]
+                return now - downNs >= config.longPressNs ? [.rightClick(at: point)] : [tap(at: point, now)]
             }
 
         case let .dragging(id, last):
