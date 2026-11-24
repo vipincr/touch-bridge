@@ -83,9 +83,12 @@ final class Deliverer {
     /// The touch display's size in screen points; with the panel size it gives points per
     /// millimetre for the drag resampler.
     var displayPoints = CGSize(width: 1920, height: 1280)
-    /// True to post each drag position as reported (no resampling); off, an open drag's cursor is
-    /// moved toward the finger at display rate (`DragResampler`).
-    var dragResampling = true
+    /// Off: an open drag's cursor is posted as reported. On, it is moved toward the finger at
+    /// display rate (`DragResampler`). On the panel's single-touch stream a drag fragments into
+    /// re-grabs, and resampling turned each fragment into a fast sweep (owner feedback
+    /// 2026-11-24, "all over the place": three title-bar grabs in 0.6 s, and two thirds fewer
+    /// taps recognised), so it stays off until drags come from the digitizer stream.
+    var dragResampling = false
 
     private let queue: DispatchQueue
     private let effects: DeliveryEffects

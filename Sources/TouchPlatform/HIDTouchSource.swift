@@ -31,7 +31,14 @@ public final class HIDTouchSource: @unchecked Sendable {
     static let appleVendorID = 0x05AC
     static let inputModeReportID: UInt8 = 0x21
     static let inputModeDigitizer: UInt8 = 0x02
+    /// Feature report 0x0A: Contact Count Maximum. Windows reads it before setting the input mode.
+    static let contactMaximumReportID: UInt8 = 0x0A
+    static let contactMaximumReportLength = 2
     static let reportBufferSize = 128
+
+    static func hex(_ bytes: [UInt8]) -> String {
+        bytes.map { String(format: "%02x", $0) }.joined(separator: " ")
+    }
 
     public let queue = DispatchQueue(label: "com.gramini.touchnext.hid", qos: .userInteractive)
 
@@ -134,8 +141,8 @@ public final class HIDTouchSource: @unchecked Sendable {
     /// left alone. Call on `queue` (from a report callback).
     public func requestMultitouchMode() {
         dispatchPrecondition(condition: .onQueue(queue))
-        // A WCH panel seen sending mouse frames has slipped back to emulation: ask again. The
-        // pipeline rate-limits this through PanelModeWatch.
+        // A WCH panel seen sending mouse frames is in single-touch emulation: ask for multitouch
+        // again. The pipeline rate-limits this through PanelModeWatch.
         if let digitizer = wchDigitizer {
             requestDigitizerMode(digitizer)
         }
@@ -162,15 +169,7 @@ public final class HIDTouchSource: @unchecked Sendable {
             onStatus?("seize failed: \(Self.describe(result))")
             return
         }
-        if page == kHIDPage_Digitizer, vendor == Self.wchVendorID {
-            // WCH panels boot in single-touch mouse emulation and only stream digitizer reports
-            // once the host asks for digitizer mode (as Windows does during enumeration). The
-            // write must happen BEFORE input reports are registered — done afterwards, the
-            // interface stays silent — and the buffer is the feature's payload only, without
-            // the report ID (Touch-Up issue #40, verified on this controller family).
-            wchDigitizer = device
-            requestDigitizerMode(device)
-        }
+        if page == kHIDPage_Digitizer, vendor == Self.wchVendorID { wchDigitizer = device }
         let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: Self.reportBufferSize)
         let context = Unmanaged.passUnretained(self).toOpaque()
         IOHIDDeviceRegisterInputReportWithTimeStampCallback(device, buffer, Self.reportBufferSize, { ctx, result, _, _, _, report, length, timestamp in
@@ -187,19 +186,34 @@ public final class HIDTouchSource: @unchecked Sendable {
         IOHIDDeviceActivate(device)
         devices.append(device)
         onStatus?("panel seized")
+        if page == kHIDPage_Digitizer, vendor == Self.wchVendorID {
+            // Now that the interrupt pipe is armed (activation), ask for multitouch the way
+            // Windows does on this controller (USBPcap, Xeneon Edge, same VID:PID): read the
+            // contact-count maximum, then set the input mode.
+            requestDigitizerMode(device)
+        }
         if page == kHIDPage_Digitizer, vendor == Self.ilitekVendorID {
             // After a power cycle (unplug, sleep) the panel starts in single-touch mouse mode.
             requestMultitouchMode()
         }
     }
 
-    /// Writes Input Mode = digitizer (feature report 0x21). The buffer is the feature's payload
-    /// only — [input mode, device index], without the report ID, which travels in its own
-    /// parameter — and the call must precede input-report registration.
+    /// Writes Input Mode = digitizer (feature report 0x21), after reading the contact-count
+    /// maximum (feature report 0x0A) as Windows does. Each step is reported, because the write
+    /// returning success says nothing about whether the panel obeyed it (the firmware accepts
+    /// the request either way); the report census in the pipeline is what shows the result.
     private func requestDigitizerMode(_ device: IOHIDDevice) {
+        var maximum = [UInt8](repeating: 0, count: Self.contactMaximumReportLength)
+        var size = CFIndex(maximum.count)
+        let read = IOHIDDeviceGetReport(device, kIOHIDReportTypeFeature, CFIndex(Self.contactMaximumReportID), &maximum, &size)
+        onStatus?("contact-count maximum (feature 0x\(String(Self.contactMaximumReportID, radix: 16, uppercase: true))): "
+            + (read == kIOReturnSuccess
+               ? "\(Self.hex(Array(maximum.prefix(size))))"
+               : "read failed: \(Self.describe(read))"))
         var mode: [UInt8] = [Self.inputModeDigitizer, 0]
         let result = IOHIDDeviceSetReport(device, kIOHIDReportTypeFeature, CFIndex(Self.inputModeReportID), &mode, mode.count)
-        onStatus?("input mode → digitizer: \(result == kIOReturnSuccess ? "set" : Self.describe(result))")
+        onStatus?("input mode → digitizer (feature 0x\(String(Self.inputModeReportID, radix: 16, uppercase: true)): "
+            + (result == kIOReturnSuccess ? "accepted)" : Self.describe(result) + ")"))
     }
 
     private func detach(_ device: IOHIDDevice) {

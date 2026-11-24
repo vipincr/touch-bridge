@@ -58,6 +58,7 @@ private func letTheDragTimerTick() {
     let queue = DispatchQueue(label: "deliverer-resample")
     let fx = FakeEffects()
     let d = Deliverer(queue: queue, effects: fx)
+    d.dragResampling = true
     queue.sync {
         d.begin(direct, at: arzopaPoint, appPID: 42, activate: false)
         d.dragDown(at: arzopaPoint)
@@ -89,6 +90,7 @@ private func letTheDragTimerTick() {
     let queue = DispatchQueue(label: "deliverer-resample-still")
     let fx = FakeEffects()
     let d = Deliverer(queue: queue, effects: fx)
+    d.dragResampling = true
     queue.sync {
         d.begin(direct, at: arzopaPoint, appPID: 42, activate: false)
         d.dragDown(at: arzopaPoint)
@@ -106,6 +108,7 @@ private func letTheDragTimerTick() {
     let queue = DispatchQueue(label: "deliverer-resample-abort")
     let fx = FakeEffects()
     let d = Deliverer(queue: queue, effects: fx)
+    d.dragResampling = true
     queue.sync {
         d.begin(direct, at: arzopaPoint, appPID: 42, activate: false)
         d.dragDown(at: arzopaPoint)
