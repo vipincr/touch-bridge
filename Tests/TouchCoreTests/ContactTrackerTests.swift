@@ -26,10 +26,12 @@ private let ms: UInt64 = 1_000_000
     #expect(tracker.update(frame([(1, true, 0.2, 0.3)]), atNs: 8 * ms).isEmpty)
 }
 
-@Test func tipOffEndsTheContact() {
+// The JN-MD-IPST105FP sends about one lift report in fourteen with the coordinates (0, 0), and a tap
+// is placed where the ended event says. A lift report's coordinates are never used.
+@Test func tipOffEndsTheContactWhereTheFingerLastWas() {
     var tracker = ContactTracker(debounceNs: 0)
     _ = tracker.update(frame([(1, true, 0.2, 0.3)]), atNs: 0)
-    #expect(tracker.update(frame([(1, false, 0.21, 0.3)]), atNs: 8 * ms) == [ContactEvent(id: 1, phase: .ended, x: 0.21, y: 0.3)])
+    #expect(tracker.update(frame([(1, false, 0, 0)]), atNs: 8 * ms) == [ContactEvent(id: 1, phase: .ended, x: 0.2, y: 0.3)])
     #expect(tracker.activeCount == 0)
 }
 
@@ -96,10 +98,9 @@ private let ms: UInt64 = 1_000_000
     _ = tracker.update(frame([(1, true, 0.2, 0.3)]), atNs: 0)
     #expect(tracker.update(frame([(1, false, 0.21, 0.3)]), atNs: 10 * ms).isEmpty)
     #expect(tracker.update(frame([]), atNs: 50 * ms).isEmpty)
-    #expect(tracker.update(frame([]), atNs: 80 * ms) == [ContactEvent(id: 1, phase: .ended, x: 0.21, y: 0.3)])
+    #expect(tracker.update(frame([]), atNs: 80 * ms) == [ContactEvent(id: 1, phase: .ended, x: 0.2, y: 0.3)])
     #expect(tracker.activeCount == 0)
 }
-
 
 // MARK: dropouts and id churn (probe 2026-11-24: WCH dropouts run 250 ms–1.7 s mid-drag)
 

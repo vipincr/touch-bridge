@@ -112,10 +112,10 @@ public struct ContactTracker: Sendable {
         let liveIDs = Set(touching.map { alias[$0.id] ?? $0.id })
         for contact in frame.contacts where !contact.touching && !touchingIDs.contains(contact.id) {
             let key = alias[contact.id] ?? contact.id
-            if var press = active.removeValue(forKey: key) {
-                // A lift report carries the finger's last position; believe it over the stale one.
-                press.x = contact.x
-                press.y = contact.y
+            if let press = active.removeValue(forKey: key) {
+                // A lift report only says the finger is gone. Its coordinates are not used: the
+                // JN-MD-IPST105FP sends about one lift report in fourteen with (0, 0), and the
+                // press's position is where a tap is placed.
                 pending[key] = (press, now)
             }
         }

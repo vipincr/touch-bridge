@@ -105,3 +105,43 @@ struct Recording {
     #expect(open == nil)
     print("recognized in probe-session-1:", histogram.sorted { $0.key < $1.key })
 }
+
+// probe-multifinger-2026-11-24 holds 24 s of two- and three-finger gestures and two one-finger
+// drags on the JN-MD-IPST105FP: 842 mouse reports, 70 touches. Five of its lift reports carry the
+// coordinates (0, 0).
+
+@Test func everyEndedEventSitsWhereItsFingerLastWas() throws {
+    let recording = try Recording(named: "probe-multifinger-2026-11-24")
+    #expect(recording.frames.count == 842)
+    var tracker = ContactTracker()
+    var last: [UInt8: (x: Double, y: Double)] = [:]
+    var lifts = 0
+    for frame in recording.frames {
+        let events = tracker.expire(atNs: frame.ns) + tracker.update(ReportParser.parse(frame.bytes)!, atNs: frame.ns)
+        for event in events {
+            if event.phase == .ended {
+                #expect(last[event.id]?.x == event.x && last[event.id]?.y == event.y,
+                        "id \(event.id) ended away from where its finger was")
+                lifts += 1
+            } else {
+                last[event.id] = (event.x, event.y)
+            }
+        }
+    }
+    #expect(lifts > 0)
+}
+
+@Test func noTapLandsAtThePanelsOrigin() throws {
+    let recording = try Recording(named: "probe-multifinger-2026-11-24")
+    var tracker = ContactTracker()
+    var recognizer = GestureRecognizer()
+    var actions: [GestureAction] = []
+    for frame in recording.frames {
+        actions += recognizer.handle(tracker.expire(atNs: frame.ns), atNs: frame.ns)
+        actions += recognizer.handle(tracker.update(ReportParser.parse(frame.bytes)!, atNs: frame.ns), atNs: frame.ns)
+    }
+    let end = recording.frames.last!.ns + 1_000_000_000
+    actions += recognizer.handle(tracker.expire(atNs: end), atNs: end)
+    let atOrigin = actions.filter { if case let .tap(at: point, _) = $0 { return point == PanelPoint(x: 0, y: 0) }; return false }
+    #expect(atOrigin.isEmpty, "the panel's origin is the Apple menu on a Mac")
+}
