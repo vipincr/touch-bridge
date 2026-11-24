@@ -99,3 +99,54 @@ private let ms: UInt64 = 1_000_000
     #expect(tracker.update(frame([]), atNs: 80 * ms) == [ContactEvent(id: 1, phase: .ended, x: 0.21, y: 0.3)])
     #expect(tracker.activeCount == 0)
 }
+
+
+// MARK: dropouts and id churn (probe 2026-11-24: WCH dropouts run 250 ms–1.7 s mid-drag)
+
+/// A long dropout is not the tracker's to bridge — holding it would delay every real lift of
+/// a moving finger. The contact ends on schedule; the recognizer's drag grace rejoins the
+/// gesture when the finger resumes.
+@Test func aMovingPressDropoutEndsOnSchedule() {
+    var tracker = ContactTracker()
+    _ = tracker.update(frame([(1, true, 0.20, 0.3)]), atNs: 0)
+    _ = tracker.update(frame([(1, true, 0.22, 0.3)]), atNs: 17 * ms)
+    _ = tracker.update(frame([]), atNs: 34 * ms)
+    let events = tracker.update(frame([]), atNs: 634 * ms)
+    #expect(events == [ContactEvent(id: 1, phase: .ended, x: 0.22, y: 0.3)])
+    #expect(tracker.activeCount == 0)
+}
+
+/// The controller renumbers the finger mid-press (frame-rate churn): the press continues
+/// under the id the gesture already knows.
+@Test func aRenumberedFingerContinuesTheSameContact() {
+    var tracker = ContactTracker()
+    _ = tracker.update(frame([(1, true, 0.20, 0.3)]), atNs: 0)
+    _ = tracker.update(frame([(1, true, 0.22, 0.3)]), atNs: 17 * ms)
+    _ = tracker.update(frame([]), atNs: 34 * ms)
+    let adopted = tracker.update(frame([(7, true, 0.24, 0.3)]), atNs: 45 * ms)   // 11 ms later, renumbered
+    #expect(adopted == [ContactEvent(id: 1, phase: .moved, x: 0.24, y: 0.3)])
+    let next = tracker.update(frame([(7, true, 0.26, 0.3)]), atNs: 62 * ms)
+    #expect(next == [ContactEvent(id: 1, phase: .moved, x: 0.26, y: 0.3)])
+    #expect(tracker.activeCount == 1)
+}
+
+/// A still press that lifts and is pressed again must be two contacts — that is a
+/// double-tap, and no stack bridges a clean lift.
+@Test func aStillPressDropoutIsNotBridged() {
+    var tracker = ContactTracker()
+    _ = tracker.update(frame([(1, true, 0.2, 0.3)]), atNs: 0)
+    _ = tracker.update(frame([]), atNs: 17 * ms)
+    let events = tracker.update(frame([(1, true, 0.201, 0.3)]), atNs: 317 * ms)
+    #expect(events.map(\.phase) == [.ended, .began])
+    #expect(events.map(\.id) == [1, 1])
+}
+
+/// A resume far outside the adoption radius is a different touch, not the drag.
+@Test func aFarResumeIsNotAdopted() {
+    var tracker = ContactTracker()
+    _ = tracker.update(frame([(1, true, 0.20, 0.3)]), atNs: 0)
+    _ = tracker.update(frame([(1, true, 0.22, 0.3)]), atNs: 17 * ms)
+    _ = tracker.update(frame([]), atNs: 34 * ms)
+    let events = tracker.update(frame([(1, true, 0.90, 0.3)]), atNs: 45 * ms)
+    #expect(events.map(\.phase) == [.ended, .began])
+}

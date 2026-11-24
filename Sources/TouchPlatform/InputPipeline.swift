@@ -68,6 +68,12 @@ public final class InputPipeline: @unchecked Sendable {
     private var touchFilter = SingleTouchFilter()
     /// When the last digitizer frame arrived; mouse-emulation frames newer than this are dropped.
     private var lastDigitizerFrameNs: UInt64 = 0
+    /// Report census (logged every 10 s while frames flow): settles from the log alone
+    /// whether the panel is streaming digitizer multitouch or mouse emulation.
+    private var digitizerReports = 0
+    private var mouseReports = 0
+    private var censusTicks = 0
+    private var censusBaseline = (0, 0)
     /// The window-drag answer for the gesture being classified, so Accessibility is asked once.
     private var windowDragMemo: (point: CGPoint, result: Bool)?
     /// The touch display's UUID, as the window server names displays in its Space state.
@@ -198,7 +204,7 @@ public final class InputPipeline: @unchecked Sendable {
 
     /// Fresh tracker and recognizer (start, stop, display lost), keeping the current settings.
     private func resetGestureState() {
-        tracker = ContactTracker()
+        tracker = ContactTracker(panelWidthMm: settings.panelWidthMm, panelHeightMm: settings.panelHeightMm)
         var fresh = GestureRecognizer()
         applyGestureSettings(to: &fresh)
         // In scroll mode a one-finger pan that starts on a toolbar or title bar still moves the window.
@@ -221,26 +227,28 @@ public final class InputPipeline: @unchecked Sendable {
     private func handle(report bytes: [UInt8], timestamp: UInt64) {
         guard let frame = ReportParser.parse(bytes) else { return }
         let now = Self.nanoseconds(timestamp)
-        if frame.source == .digitizer { lastDigitizerFrameNs = now }
+        if frame.source == .digitizer {
+            lastDigitizerFrameNs = now
+            digitizerReports += 1
+            if digitizerReports == 1 { status("panel report: first digitizer frame") }
+        } else {
+            mouseReports += 1
+            if mouseReports == 1 { status("panel report: first mouse frame") }
+        }
         // Once digitizer frames flow, the panel's mouse emulation is trailing off: ignore it, so
         // one finger is not delivered twice (as a digitizer contact and as contact id 0).
         if frame.source == .mouse, now - lastDigitizerFrameNs < 1_000_000_000 { return }
-        // A WCH panel not yet switched to digitizer mode streams single touch on its mouse
-        // interface (after a replug, until the unlock lands); that is its normal input then.
-        if source.family == .wch, frame.source == .mouse { panelMode.mouseModeIsNormal = true }
         switch panelMode.observe(frame.source, atNs: now) {
         case .requestMultitouch:
             status("panel is sending single-touch (mouse) reports; asking it for multitouch")
             source.requestMultitouchMode()
         case .multitouchRestored:
             status("panel sends multitouch reports again")
-            panelMode.mouseModeIsNormal = false
         case nil:
             break
         }
-        // A single-contact stream teleports between fingers: split jumps into lift + fresh touch.
-        for frame in touchFilter.filter(frame, panelWidthMm: settings.panelWidthMm, panelHeightMm: settings.panelHeightMm) {
-            process(tracker.update(frame, atNs: now), now: now)
+        for repaired in touchFilter.filter(frame, atNs: now, panelWidthMm: settings.panelWidthMm, panelHeightMm: settings.panelHeightMm) {
+            process(tracker.update(repaired, atNs: now), now: now)
         }
     }
 
@@ -259,6 +267,13 @@ public final class InputPipeline: @unchecked Sendable {
             if activeInputMode == .multitouch, contacts.isEmpty {
                 tuioIdleTicks += 1
                 if tuioIdleTicks >= 20 { tuioIdleTicks = 0; sendTUIO([:], atNs: now) }
+            }
+            censusTicks += 1
+            if censusTicks >= 200 {
+                censusTicks = 0
+                let d = digitizerReports - censusBaseline.0, m = mouseReports - censusBaseline.1
+                if d + m > 0 { status("panel reports (10 s): \(d) digitizer, \(m) mouse") }
+                censusBaseline = (digitizerReports, mouseReports)
             }
         }
         expireTimer = timer

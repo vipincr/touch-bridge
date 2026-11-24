@@ -647,3 +647,35 @@ private let fourStart: [(Double, Double)] = [(0.4, 0.5), (0.45, 0.5), (0.5, 0.5)
     #expect(phase1 == .changed && abs(dy1 - mmY(4)) < 1e-9)
     guard case .scrollEnded = s.actions.last else { Issue.record("expected scrollEnded"); return }
 }
+
+// MARK: long dropouts (probe 2026-11-24: WCH dropouts run 250 ms–1.7 s mid-drag)
+
+/// A long dropout mid-drag: the grace holds the drag and the finger resuming tens of
+/// millimetres along its way continues it — one drag, not a fragment re-grabbing wherever
+/// the finger reappeared.
+@Test func aLongDropoutMidDragIsBridgedWithARadiusGrownBySpeed() {
+    var s = Script()
+    s.at(0, began(0, 0.3, 0.3))
+    s.at(50, moved(0, 0.3 + mmX(12), 0.3))
+    s.at(70, moved(0, 0.3 + mmX(20), 0.3))
+    s.at(80, ended(0, 0.3 + mmX(20), 0.3))          // the panel drops out mid-drag
+    s.at(680, began(1, 0.3 + mmX(40), 0.3))         // 600 ms later, 20 mm along the way
+    s.at(900, ended(1, 0.3 + mmX(44), 0.3))
+    s.at(2200)                                      // the second grace runs out quietly
+    #expect(s.actions.filter { if case .dragBegan = $0 { true } else { false } }.count == 1)
+    #expect(s.actions.last == .dragEnded(at: PanelPoint(x: 0.3 + mmX(44), y: 0.3)))
+}
+
+/// A touch landing far from the held drag is not that drag's finger coming back: the drag
+/// commits its end and the new touch is its own gesture.
+@Test func aTouchFarFromTheHeldDragCommitsTheEndInsteadOfResuming() {
+    var s = Script()
+    s.at(0, began(0, 0.3, 0.3))
+    s.at(50, moved(0, 0.3 + mmX(12), 0.3))
+    s.at(70, moved(0, 0.3 + mmX(20), 0.3))
+    s.at(80, ended(0, 0.3 + mmX(20), 0.3))
+    s.at(380, began(1, 0.3 + mmX(120), 0.3))   // 100 mm away: not this drag's finger
+    s.at(440, ended(1, 0.3 + mmX(120), 0.3))
+    #expect(s.actions.contains(.dragEnded(at: PanelPoint(x: 0.3 + mmX(20), y: 0.3))))
+    #expect(s.actions.last == .tap(at: PanelPoint(x: 0.3 + mmX(120), y: 0.3), count: 1))
+}

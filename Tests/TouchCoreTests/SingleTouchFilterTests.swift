@@ -3,6 +3,7 @@ import Testing
 
 private let width = 221.9
 private let height = 147.9
+private let ms: UInt64 = 1_000_000
 
 private func mouseFrame(_ x: Double, _ y: Double, touching: Bool = true) -> TouchFrame {
     TouchFrame(source: .mouse, contacts: [Contact(id: 0, touching: touching, x: x, y: y)], scanTime: nil)
@@ -10,33 +11,58 @@ private func mouseFrame(_ x: Double, _ y: Double, touching: Bool = true) -> Touc
 
 @Test func smallMouseMovementPassesThrough() {
     var filter = SingleTouchFilter()
-    #expect(filter.filter(mouseFrame(0.5, 0.5), panelWidthMm: width, panelHeightMm: height) == [mouseFrame(0.5, 0.5)])
-    #expect(filter.filter(mouseFrame(0.52, 0.5), panelWidthMm: width, panelHeightMm: height) == [mouseFrame(0.52, 0.5)])
+    #expect(filter.filter(mouseFrame(0.5, 0.5), atNs: 0, panelWidthMm: width, panelHeightMm: height) == [mouseFrame(0.5, 0.5)])
+    #expect(filter.filter(mouseFrame(0.52, 0.5), atNs: 17 * ms, panelWidthMm: width, panelHeightMm: height) == [mouseFrame(0.52, 0.5)])
 }
 
-@Test func aTeleportSplitsIntoLiftAndFreshTouch() {
+@Test func aSlowPressGlitchIsDiscardedAndThePositionHeld() {
+    // Probe 2026-11-24: single-frame jumps up to 129 mm while the tip stays down. libinput's
+    // jump rule: 20 mm per 12 ms normalized (7 mm growth) is not finger motion — discard it.
     var filter = SingleTouchFilter()
-    _ = filter.filter(mouseFrame(0.1, 0.1), panelWidthMm: width, panelHeightMm: height)
-    let frames = filter.filter(mouseFrame(0.8, 0.7), panelWidthMm: width, panelHeightMm: height)
-    #expect(frames.count == 2)
-    #expect(frames[0].contacts == [Contact(id: 0, touching: false, x: 0.1, y: 0.1)])
-    #expect(frames[1].contacts == [Contact(id: 0, touching: true, x: 0.8, y: 0.7)])
+    _ = filter.filter(mouseFrame(0.5, 0.5), atNs: 0, panelWidthMm: width, panelHeightMm: height)
+    _ = filter.filter(mouseFrame(0.51, 0.5), atNs: 17 * ms, panelWidthMm: width, panelHeightMm: height)
+    let frames = filter.filter(mouseFrame(0.9, 0.5), atNs: 34 * ms, panelWidthMm: width, panelHeightMm: height)
+    #expect(frames == [mouseFrame(0.51, 0.5)])
+    // A report 2 mm from the held point is real finger motion again, and passes.
+    #expect(filter.filter(mouseFrame(0.5, 0.5), atNs: 51 * ms, panelWidthMm: width, panelHeightMm: height) == [mouseFrame(0.5, 0.5)])
 }
 
-@Test func aLiftThenTouchElsewhereIsNotSplit() {
+@Test func aFastFlickPasses() {
+    // 0.04 x-units per 17 ms ≈ 520 mm/s: under the 20 mm/12 ms normalized ceiling.
     var filter = SingleTouchFilter()
-    _ = filter.filter(mouseFrame(0.1, 0.1), panelWidthMm: width, panelHeightMm: height)
-    _ = filter.filter(mouseFrame(0.1, 0.1, touching: false), panelWidthMm: width, panelHeightMm: height)
-    #expect(filter.filter(mouseFrame(0.8, 0.7), panelWidthMm: width, panelHeightMm: height) == [mouseFrame(0.8, 0.7)])
+    _ = filter.filter(mouseFrame(0.50, 0.5), atNs: 0, panelWidthMm: width, panelHeightMm: height)
+    #expect(filter.filter(mouseFrame(0.54, 0.5), atNs: 17 * ms, panelWidthMm: width, panelHeightMm: height) == [mouseFrame(0.54, 0.5)])
+    #expect(filter.filter(mouseFrame(0.58, 0.5), atNs: 34 * ms, panelWidthMm: width, panelHeightMm: height) == [mouseFrame(0.58, 0.5)])
 }
 
-@Test func digitizerFramesPassThroughUntouched() {
+@Test func aPersistentRelocationIsAcceptedAfterTheCap() {
+    var filter = SingleTouchFilter(jumpAcceptCap: 3)
+    _ = filter.filter(mouseFrame(0.1, 0.1), atNs: 0, panelWidthMm: width, panelHeightMm: height)
+    for t in 1...2 {
+        #expect(filter.filter(mouseFrame(0.8, 0.7), atNs: UInt64(t) * 17 * ms, panelWidthMm: width, panelHeightMm: height) == [mouseFrame(0.1, 0.1)])
+    }
+    #expect(filter.filter(mouseFrame(0.8, 0.7), atNs: 3 * 17 * ms, panelWidthMm: width, panelHeightMm: height) == [mouseFrame(0.8, 0.7)])
+}
+
+@Test func aStaleSampleBypassesTheJumpTest() {
+    // libinput: frames staler than 30 ms are not jump evidence (the finger may be anywhere).
     var filter = SingleTouchFilter()
-    let frame = TouchFrame(source: .digitizer, contacts: [
+    _ = filter.filter(mouseFrame(0.1, 0.1), atNs: 0, panelWidthMm: width, panelHeightMm: height)
+    #expect(filter.filter(mouseFrame(0.9, 0.9), atNs: 200 * ms, panelWidthMm: width, panelHeightMm: height) == [mouseFrame(0.9, 0.9)])
+}
+
+@Test func liftAndDigitizerFramesResetTheRepairState() {
+    var filter = SingleTouchFilter()
+    _ = filter.filter(mouseFrame(0.1, 0.1), atNs: 0, panelWidthMm: width, panelHeightMm: height)
+    _ = filter.filter(mouseFrame(0.1, 0.1, touching: false), atNs: 17 * ms, panelWidthMm: width, panelHeightMm: height)
+    // A new press starts from its own position, not held against the old one.
+    #expect(filter.filter(mouseFrame(0.8, 0.7), atNs: 100 * ms, panelWidthMm: width, panelHeightMm: height) == [mouseFrame(0.8, 0.7)])
+
+    let digitizer = TouchFrame(source: .digitizer, contacts: [
         Contact(id: 1, touching: true, x: 0.1, y: 0.1),
         Contact(id: 2, touching: true, x: 0.9, y: 0.9),
     ], scanTime: 5)
-    #expect(filter.filter(frame, panelWidthMm: width, panelHeightMm: height) == [frame])
+    #expect(filter.filter(digitizer, atNs: 120 * ms, panelWidthMm: width, panelHeightMm: height) == [digitizer])
 }
 
 @Test func aLingerBeforeMovingIsAHoldDragAndASlowSwipeScrolls() {

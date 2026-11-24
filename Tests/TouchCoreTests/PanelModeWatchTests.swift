@@ -28,11 +28,17 @@ private let s: UInt64 = 1_000_000_000
     #expect(watch.observe(.digitizer, atNs: s) == nil)
 }
 
-@Test func mouseModeIsNormalNeverAsksForMultitouch() {
+@Test func aSlipAfterRestorationAsksAgain() {
     var watch = PanelModeWatch()
-    watch.mouseModeIsNormal = true
-    #expect(watch.observe(.mouse, atNs: 0) == nil)
-    #expect(watch.observe(.mouse, atNs: 6 * s) == nil)
-    // Digitizer frames still count as a return to multitouch.
-    #expect(watch.observe(.digitizer, atNs: 7 * s) == .multitouchRestored)
+    #expect(watch.observe(.mouse, atNs: 0) == .requestMultitouch)
+    #expect(watch.observe(.digitizer, atNs: 1 * s) == .multitouchRestored)
+    // The panel slips back mid-session: the next mouse frame asks again without delay.
+    #expect(watch.observe(.mouse, atNs: 20 * s) == .requestMultitouch)
+}
+
+@Test func mouseFramesKeepAskingWhileThePanelStaysInEmulation() {
+    var watch = PanelModeWatch()
+    #expect(watch.observe(.mouse, atNs: 0) == .requestMultitouch)
+    #expect(watch.observe(.mouse, atNs: 5 * s) == .requestMultitouch)
+    #expect(watch.observe(.mouse, atNs: 10 * s) == .requestMultitouch)
 }
