@@ -77,6 +77,15 @@ final class Deliverer {
     /// swipe tracking measures progress: Safari's back/forward page swipe follows the fingers. Set per gesture.
     var scrollGestureStream = false
     var log: (String) -> Void = { _ in }
+    /// The touch panel's active area in millimetres, for the drag resampler's millimetre geometry.
+    var panelWidthMm = 221.9
+    var panelHeightMm = 147.9
+    /// The touch display's size in screen points; with the panel size it gives points per
+    /// millimetre for the drag resampler.
+    var displayPoints = CGSize(width: 1920, height: 1280)
+    /// True to post each drag position as reported (no resampling); off, an open drag's cursor is
+    /// moved toward the finger at display rate (`DragResampler`).
+    var dragResampling = true
 
     private let queue: DispatchQueue
     private let effects: DeliveryEffects
@@ -94,12 +103,17 @@ final class Deliverer {
     private var savedCursor: CGPoint?
     private var restore: DispatchWorkItem?
     private var momentumTimer: DispatchSourceTimer?
+    /// The open drag's cursor path, resampled from the finger's reported positions.
+    private var dragPath: DragResampler?
+    private var dragTimer: DispatchSourceTimer?
     /// The app that was frontmost before touches activated another one (for "return focus").
     private var previousFrontmost: pid_t?
     private var focusReturn: DispatchWorkItem?
 
     /// How long the cursor stays at the finger after a Warp gesture before returning.
     static let warpReturnDelay: TimeInterval = 0.05
+    /// How often an open drag's cursor is moved toward the finger (display rate).
+    static let dragTickInterval: TimeInterval = 1.0 / 120
     /// Longer than the double-click interval, so a double-tap doesn't bounce focus back and forth.
     static let focusReturnDelay: TimeInterval = 0.6
 
@@ -176,15 +190,69 @@ final class Deliverer {
     }
 
     func dragDown(at point: CGPoint) {
+        stopDragPath()
         press(.leftMouseDown, at: point, button: .left, clickState: 1)
+        guard dragResampling, pointsPerMm > 0 else { return }
+        dragPath = DragResampler(start: point, mmPerUnit: 1 / pointsPerMm)
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + Self.dragTickInterval, repeating: Self.dragTickInterval, leeway: .milliseconds(1))
+        timer.setEventHandler { [weak self] in self?.dragTick() }
+        dragTimer = timer
+        timer.resume()
     }
 
+    /// The finger moved during a drag. With resampling on, this feeds the cursor path and the
+    /// 120 Hz `dragTick` posts; off, the position is posted as reported.
     func dragMove(to point: CGPoint) {
-        post(EventSynth.mouse(.leftMouseDragged, at: point, button: .left, clickState: 1, eventNumber: eventNumber, window: window, source: source))
+        guard var path = dragPath else {
+            postDragMove(to: point)
+            return
+        }
+        path.sample(point, atNs: DispatchTime.now().uptimeNanoseconds)
+        dragPath = path
+    }
+
+    private func dragTick() {
+        guard var path = dragPath else { return }
+        if let next = path.step(atNs: DispatchTime.now().uptimeNanoseconds) {
+            postDragMove(to: next)
+        }
+        dragPath = path
     }
 
     func dragUp(at point: CGPoint) {
+        finishDragPath(at: point)
+        stopDragPath()
         release(.leftMouseUp, at: point, button: .left, clickState: 1)
+    }
+
+    /// The drag ends exactly where the finger lifted, not a glide behind it. A press that never
+    /// moved (a click-and-hold) has nothing to post before its release.
+    private func finishDragPath(at point: CGPoint) {
+        guard var path = dragPath else { return }
+        path.sample(point, atNs: DispatchTime.now().uptimeNanoseconds)
+        let final = path.finish()
+        dragPath = nil
+        // `location` is where the last drag event was posted.
+        guard hypot(final.x - location.x, final.y - location.y) * pointsPerMm >= 0.01 else { return }
+        postDragMove(to: final)
+    }
+
+    /// Screen points per millimetre on the touch display, along whichever axis is narrower: a
+    /// millimetre of finger travel is that many points (square pixels, so both axes match).
+    private var pointsPerMm: Double {
+        max(0, min(displayPoints.width / panelWidthMm, displayPoints.height / panelHeightMm))
+    }
+
+    private func postDragMove(to point: CGPoint) {
+        location = point
+        post(EventSynth.mouse(.leftMouseDragged, at: point, button: .left, clickState: 1, eventNumber: eventNumber, window: window, source: source))
+    }
+
+    private func stopDragPath() {
+        dragTimer?.cancel()
+        dragTimer = nil
+        dragPath = nil
     }
 
     /// A mouse-moved event with a push direction, through the window server. It moves the parked cursor,
@@ -248,6 +316,7 @@ final class Deliverer {
         if let button = buttonDown {
             release(button == .right ? .rightMouseUp : .leftMouseUp, at: location, button: button, clickState: 1)
         }
+        stopDragPath()
         focusReturn?.cancel()
         focusReturn = nil
         previousFrontmost = nil

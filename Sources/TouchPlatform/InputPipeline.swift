@@ -118,6 +118,8 @@ public final class InputPipeline: @unchecked Sendable {
             deliverer.dryRun = settings.dryRun
             dockSwipe.dryRun = settings.dryRun
             deliverer.focusMode = settings.focus
+            deliverer.panelWidthMm = settings.panelWidthMm
+            deliverer.panelHeightMm = settings.panelHeightMm
             applyGestureSettings(to: &recognizer)
             refreshDisplay()
             if settings.inputMode != activeInputMode { switchInputMode(to: settings.inputMode) }
@@ -333,8 +335,7 @@ public final class InputPipeline: @unchecked Sendable {
             deliverer.dragMove(to: point(mapper, to))
         case let .dragEnded(at):
             deliverer.dragUp(at: point(mapper, at))
-            deliverer.end()
-        case let .scroll(dx, dy, phase):
+            deliverer.end()        case let .scroll(dx, dy, phase):
             if phase == .began {
                 begin(.scroll, at: centroid(mapper))
                 // Two fingers, like the trackpad: the page swipe tracks them. One-finger pans stay plain scrolls.
@@ -710,6 +711,9 @@ public final class InputPipeline: @unchecked Sendable {
         let next = CoordinateMapper(bounds: ScreenRect(x: b.origin.x, y: b.origin.y, width: b.width, height: b.height), rotation: CGDisplayRotation(id))
         if next != mapper { status("touch display at \(Int(b.origin.x)),\(Int(b.origin.y)) \(Int(b.width))×\(Int(b.height)) rotation \(next.rotation)") }
         mapper = next
+        deliverer.panelWidthMm = settings.panelWidthMm
+        deliverer.panelHeightMm = settings.panelHeightMm
+        deliverer.displayPoints = CGSize(width: b.width, height: b.height)
     }
 
     private func status(_ message: String) {

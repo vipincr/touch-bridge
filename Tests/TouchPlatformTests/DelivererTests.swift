@@ -39,7 +39,86 @@ private let direct = Deliverer.Target.direct(DirectTarget(pid: 42, window: 7, or
 private func make() -> (Deliverer, FakeEffects, DispatchQueue) {
     let queue = DispatchQueue(label: "deliverer-test")
     let effects = FakeEffects()
-    return (Deliverer(queue: queue, effects: effects), effects, queue)
+    let deliverer = Deliverer(queue: queue, effects: effects)
+    // These tests assert on what each call posts; the drag resampler posts from a timer instead
+    // and has its own tests below.
+    deliverer.dragResampling = false
+    return (deliverer, effects, queue)
+}
+
+private let pointPerMm = 8.65   // 1920 points over 221.9 mm (the JN-MD-IPST105FP)
+private func mm(_ value: Double) -> CGFloat { value * pointPerMm }
+
+/// Waits long enough for the 120 Hz drag timer to have ticked a few times.
+private func letTheDragTimerTick() {
+    Thread.sleep(forTimeInterval: Deliverer.dragTickInterval * 6)
+}
+
+@Test func aResampledDragIsPostedByTheTimerAndEndsWhereTheFingerLifted() {
+    let queue = DispatchQueue(label: "deliverer-resample")
+    let fx = FakeEffects()
+    let d = Deliverer(queue: queue, effects: fx)
+    queue.sync {
+        d.begin(direct, at: arzopaPoint, appPID: 42, activate: false)
+        d.dragDown(at: arzopaPoint)
+    }
+    // Nothing glides at the press: the cursor is under the finger.
+    letTheDragTimerTick()
+    queue.sync {}
+    #expect(fx.posted.map(\.type.rawValue) == [1], "only the left mouse-down")
+
+    // A slow drag: 59 Hz reports with every other frame repeated (the panel's recorded texture).
+    for frame in 0..<12 {
+        let x = frame.isMultiple(of: 2) ? mm(Double(frame) * 0.7) : mm(Double(frame - 1) * 0.7)
+        queue.sync { d.dragMove(to: CGPoint(x: arzopaPoint.x + x, y: arzopaPoint.y)) }
+        Thread.sleep(forTimeInterval: 0.017)
+    }
+    letTheDragTimerTick()
+    queue.sync { d.dragUp(at: CGPoint(x: arzopaPoint.x + mm(7.7), y: arzopaPoint.y)) }
+    letTheDragTimerTick()
+    queue.sync {}
+
+    let moves = fx.posted.filter { $0.type == .leftMouseDragged }.map(\.location.x)
+    #expect(moves.count > 12, "more cursor updates than distinct reported positions (6), posted at display rate")
+    #expect(zip(moves, moves.dropFirst()).allSatisfy { $1 >= $0 }, "monotonic: never backwards, never ahead of the finger")
+    #expect(abs((moves.last ?? 0) - (arzopaPoint.x + mm(7.7))) < 0.01, "the drag ends exactly where the finger lifted")
+    #expect(fx.posted.last?.type == .leftMouseUp)
+}
+
+@Test func aResampledDragPostsNothingWhileTheFingerIsStill() {
+    let queue = DispatchQueue(label: "deliverer-resample-still")
+    let fx = FakeEffects()
+    let d = Deliverer(queue: queue, effects: fx)
+    queue.sync {
+        d.begin(direct, at: arzopaPoint, appPID: 42, activate: false)
+        d.dragDown(at: arzopaPoint)
+        d.dragMove(to: arzopaPoint)   // same position again
+    }
+    letTheDragTimerTick()
+    queue.sync {}
+    #expect(fx.posted.count == 1, "mouse-down only; a still finger posts nothing")
+    queue.sync { d.dragUp(at: arzopaPoint) }
+    queue.sync {}
+    #expect(fx.posted.map(\.type.rawValue) == [1, 2], "mouse-down, then mouse-up: no drag events for a still finger")
+}
+
+@Test func abortStopsTheDragTimer() {
+    let queue = DispatchQueue(label: "deliverer-resample-abort")
+    let fx = FakeEffects()
+    let d = Deliverer(queue: queue, effects: fx)
+    queue.sync {
+        d.begin(direct, at: arzopaPoint, appPID: 42, activate: false)
+        d.dragDown(at: arzopaPoint)
+        d.dragMove(to: CGPoint(x: arzopaPoint.x + mm(20), y: arzopaPoint.y))
+        d.abortGesture()
+    }
+    letTheDragTimerTick()
+    queue.sync {}
+    #expect(fx.posted.last?.type == .leftMouseUp, "nothing is posted after the abort")
+    let count = fx.posted.count
+    letTheDragTimerTick()
+    queue.sync {}
+    #expect(fx.posted.count == count, "the timer is gone")
 }
 
 // Review finding 1: a Direct gesture that interrupts a Warp scroll's momentum left the cursor hidden.
