@@ -8,7 +8,7 @@ TouchNext is a small menu-bar app that runs in user space:
 - No kernel or system extension, no root, and System Integrity Protection stays on.
 - Quitting it hands the panel back to macOS.
 
-> **Hardware note:** this fork is maintained for the JAPANNEXT **JN-MD-IPST105FP** touch panel, and the input layer auto-detects USB HID touch-screen digitizers by class. See [Hardware support](#hardware-support).
+> **Hardware note:** this fork is maintained for the JAPANNEXT **JN-MD-IPST105FP** touch panel, and the input layer auto-detects USB HID touch-screen digitizers by class. **Status on that panel, 2026-11-24: single-touch only.** Taps and one-finger gestures work with limited precision, drags stutter, and multi-finger gestures do not work yet. The panel declares ten-finger multitouch, and getting it to send those reports on macOS is the open problem. See [Hardware support](#hardware-support).
 
 ## Contents
 
