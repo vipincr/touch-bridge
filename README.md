@@ -8,7 +8,7 @@ TouchNext is a small menu-bar app that runs in user space:
 - No kernel or system extension, no root, and System Integrity Protection stays on.
 - Quitting it hands the panel back to macOS.
 
-> **Hardware note:** this fork is maintained for the JAPANNEXT **JN-MD-IPST105FP** touch panel, and the input layer auto-detects USB HID touch-screen digitizers by class. **Status on that panel, 2026-11-24: single-touch only.** Taps and one-finger gestures work with limited precision, drags stutter, and multi-finger gestures do not work yet. The panel declares ten-finger multitouch, and getting it to send those reports on macOS is the open problem. See [Hardware support](#hardware-support).
+> **Hardware note:** this fork is maintained for the JAPANNEXT **JN-MD-IPST105FP** touch panel, and the input layer auto-detects USB HID touch-screen digitizers by class. **Status on that panel, 2026-11-24: single-touch only, and no macOS software can change that.** The panel's firmware withholds its multitouch reports from a Mac (see [Hardware support](#hardware-support)). Taps and one-finger gestures work with limited precision and drags stutter. With two or more fingers down, the panel's mouse emulation jumps between fingers.
 
 ## Contents
 
@@ -125,7 +125,7 @@ The top line shows fingers now and the most at once. Clear wipes the canvas.
 | | |
 |---|---|
 | Touch monitor | JAPANNEXT **JN-MD-IPST105FP**, 10.5-inch IPS, 1920×1280, 5-point touch |
-| Touch controller | WCH (wch.cn) `0x27C0:0x0859` — declares ten-finger multitouch, not yet received on macOS, see the note below; ILITEK `0x222A:0x0001` unchanged |
+| Touch controller | WCH (wch.cn) `0x27C0:0x0859`: single-touch on macOS, its firmware gates the multitouch stream (note below); ILITEK `0x222A:0x0001` unchanged |
 | Mac | MacBook Pro (Apple silicon), macOS 26 |
 
 The upstream project's reference panel (ARZOPA 1920×1080, ILITEK `0x222A:0x0001`, 10 contacts) keeps working through the same code paths.
@@ -139,7 +139,19 @@ The upstream project's reference panel (ARZOPA 1920×1080, ILITEK `0x222A:0x0001
 
 Panels whose controllers use a different report layout than the ILITEK family still need the parser adapted. [Adapting to another touchscreen](#adapting-to-another-touchscreen) walks through each step.
 
-**The WCH panel declares full multitouch, but TouchNext has not yet received it on macOS.** The controller's HID report descriptor (read from the registry) declares a ten-finger digitizer report, and it answers a feature read with a maximum of 15 contacts, so the hardware is multitouch. Windows gets those reports after an Input Mode feature write. TouchNext sends the same write, the panel accepts it, and it still sends only single-touch mouse reports: measured over several sessions on 2026-11-24, thousands of mouse frames and no digitizer frames. Until that is solved, TouchNext reads the single-touch mouse reports, so taps are approximate, drags can stutter, and no multi-finger gesture works. The community reports of multitouch after this write ([Touch-Up issue #40](https://github.com/shueber/Touch-Up/issues/40)) concern the sibling controller `0x0858`, not this one.
+**The WCH panel declares full multitouch and withholds it from a Mac.** The controller's HID report descriptor declares a ten-finger digitizer report, and it answers a feature read with a maximum of 15 contacts. Windows and Linux hosts get those reports. A Mac gets single-touch mouse reports on the controller's mouse interface.
+
+The firmware decides during USB enumeration, from how the host reads its string descriptors. [TinyUSB issue #4346](https://github.com/hathach/tinyusb/issues/4346) shows on the same controller that a host reading two bytes of each string and then the rest gets no multitouch, and one reading each string in a single 255-byte request (as Linux does) gets it. macOS shows the first result. [chill1Penguin/macos-xeneon-edge-multitouch](https://github.com/chill1Penguin/macos-xeneon-edge-multitouch) gets multitouch on macOS by patching that check out of the firmware.
+
+Measured on the JN-MD-IPST105FP on 2026-11-24 over raw USB, with the device taken from macOS and a finger on the glass:
+
+- The Windows write (`SET_REPORT`, feature `0x21`, data `21 02 00`) is acknowledged. Reading that feature back returns the first bytes of the request packet after every mode written, so the firmware stores no mode. Contact Count Maximum (feature `0x0A`) reads back `0a 0f`.
+- Linux-style string descriptor reads (one 255-byte request each), a reconfigure that leaves the interfaces without drivers, and the Windows write, in each combination tried, left the digitizer interface at zero reports while the mouse interface delivered 116 to 348 reports per 8 seconds.
+- The mouse emulation carries no multi-finger input. Over 24 seconds of two- and three-finger gestures, all 842 reports had button values 0 or 1 and a zero wheel byte, and the pointer jumped between fingers.
+
+Input Mode 1 and 3 were not judged: no touch arrived in those windows.
+
+TouchNext therefore reads the single-touch mouse reports, and replugging changes nothing. Multitouch on macOS needs one of two things outside this app: a USB device between the Mac and the panel that enumerates it as Windows does (the panel is a full-speed device), or a firmware without the check. The community reports of multitouch after the Input Mode write ([Touch-Up issue #40](https://github.com/shueber/Touch-Up/issues/40)) concern the sibling controller `0x0858`.
 
 ## Requirements
 
@@ -240,7 +252,7 @@ touch panel ──HID──▶ ReportParser ─▶ ContactTracker ─▶ Gesture
 - **Multitouch Apps:** gesture recognition is skipped entirely. Each frame of contacts becomes a TUIO bundle: `TUIOSessions` gives every touch its own session id and a velocity, and `TUIO.frame` builds the OSC bytes, sent over UDP.
 
 **Staying reliable.**
-- **Multitouch mode:** TouchNext asks the panel for multitouch when it connects and again whenever single-touch (mouse-mode) reports appear. On the WCH `0x0859` panel the request is accepted but not honoured yet (see the hardware note).
+- **Multitouch mode:** TouchNext asks the panel for multitouch when it connects and again whenever single-touch (mouse-mode) reports appear. On the WCH `0x0859` panel the firmware acknowledges the write and ignores it (see the hardware note).
 - **Stuck buttons:** every open press is journaled to disk, so a restart after a crash releases it where it was made.
 - **Login item:** a per-user launch agent starts TouchNext at login and restarts it after a crash.
 
@@ -278,7 +290,7 @@ You'll change a few constants and possibly the report parser, then rebuild.
 
 5. **Set the physical size.** Set `panelWidthMm` and `panelHeightMm` in `PipelineSettings` (`Sources/TouchPlatform/InputPipeline.swift`) to the panel's active area. Gesture thresholds are in millimetres.
 
-6. **Check the multitouch switch.** The ILITEK panel needs feature reports 2 and 6 read before it leaves single-touch mode (`requestMultitouchMode` in `HIDTouchSource.swift`); this happens automatically for ILITEK controllers only. WCH controllers take the Input Mode write TouchNext already sends.
+6. **Check the multitouch switch.** The ILITEK panel needs feature reports 2 and 6 read before it leaves single-touch mode (`requestMultitouchMode` in `HIDTouchSource.swift`); this happens automatically for ILITEK controllers only. A WCH `0x0859` controller acknowledges the Input Mode write TouchNext sends and ignores it on macOS (see the hardware note).
 
 7. **Test and install.**
    ```bash
@@ -323,7 +335,7 @@ Add `-g` after `open` to keep a diagnostic run in the background.
 
 **The panel is found but apps don't react.** Accessibility permission is missing, or was granted to a differently signed build. Switch it off and on again in System Settings → Privacy & Security → Accessibility, then restart TouchNext.
 
-**Only one finger works.** On the WCH `0x27C0:0x0859` panel that is the current state: see the hardware note. Replugging does not change it.
+**Only one finger works.** On the WCH `0x27C0:0x0859` panel that is as far as a Mac can go: see the hardware note. Replugging does not change it.
 
 **A gesture behaves differently from the trackpad.** Check "Follow Trackpad Settings" and the trackpad switches listed under it.
 
