@@ -7,3 +7,6 @@ probe-*.jsonl
 # …except the recording the replay tests use.
 !Tests/TouchCoreTests/Fixtures/probe-*.jsonl
 /rust/target/
+
+# session scratch (research copies, probe analysis, plan drafts)
+/tmp/
