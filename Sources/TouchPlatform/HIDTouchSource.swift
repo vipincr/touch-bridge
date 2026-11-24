@@ -47,6 +47,8 @@ public final class HIDTouchSource: @unchecked Sendable {
     private var managers: [IOHIDManager] = []
     /// Seized devices; only touched on `queue`.
     private var devices: [IOHIDDevice] = []
+    /// The WCH digitizer interface, for re-asking when the panel slips back to mouse mode.
+    private var wchDigitizer: IOHIDDevice?
     /// Keeps the match boxes alive for the lifetime of their managers.
     private var boxes: [MatchBox] = []
     private var matchedAny = false
@@ -132,6 +134,11 @@ public final class HIDTouchSource: @unchecked Sendable {
     /// left alone. Call on `queue` (from a report callback).
     public func requestMultitouchMode() {
         dispatchPrecondition(condition: .onQueue(queue))
+        // A WCH panel seen sending mouse frames has slipped back to emulation: ask again. The
+        // pipeline rate-limits this through PanelModeWatch.
+        if let digitizer = wchDigitizer {
+            requestDigitizerMode(digitizer)
+        }
         for device in devices where Self.vendor(of: device) == Self.ilitekVendorID {
             for (id, length) in [(2, 2), (6, 257)] {
                 var bytes = [UInt8](repeating: 0, count: length)
@@ -161,6 +168,7 @@ public final class HIDTouchSource: @unchecked Sendable {
             // write must happen BEFORE input reports are registered — done afterwards, the
             // interface stays silent — and the buffer is the feature's payload only, without
             // the report ID (Touch-Up issue #40, verified on this controller family).
+            wchDigitizer = device
             requestDigitizerMode(device)
         }
         let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: Self.reportBufferSize)
@@ -195,6 +203,7 @@ public final class HIDTouchSource: @unchecked Sendable {
     }
 
     private func detach(_ device: IOHIDDevice) {
+        if let digitizer = wchDigitizer, CFEqual(digitizer, device) { wchDigitizer = nil }
         guard let index = devices.firstIndex(where: { CFEqual($0, device) }) else { return }
         IOHIDDeviceCancel(devices.remove(at: index))
         onStatus?("panel removed")

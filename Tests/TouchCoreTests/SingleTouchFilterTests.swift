@@ -40,17 +40,17 @@ private func mouseFrame(_ x: Double, _ y: Double, touching: Bool = true) -> Touc
 }
 
 @Test func aLingerBeforeMovingIsAHoldDragAndASlowSwipeScrolls() {
-    // 100 ms of drift past 1 mm, then the slop: scrolls (previously it selected text, because
-    // the drag was classified by touch age instead of by stillness).
+    // 100 ms of drift past 1 mm, then clear travel: scrolls (previously it selected text,
+    // because the drag was classified by touch age instead of by stillness).
     var recognizer = GestureRecognizer(config: GestureConfig())
     _ = recognizer.handle([ContactEvent(id: 0, phase: .began, x: 0.5, y: 0.5)], atNs: 0)
     _ = recognizer.handle([ContactEvent(id: 0, phase: .moved, x: 0.508, y: 0.5)], atNs: 100_000_000)
-    let actions = recognizer.handle([ContactEvent(id: 0, phase: .moved, x: 0.5625, y: 0.5)], atNs: 600_000_000)
-    #expect(actions.first == .scroll(dx: 0.0625, dy: 0, phase: .began))
+    let actions = recognizer.handle([ContactEvent(id: 0, phase: .moved, x: 0.59375, y: 0.5)], atNs: 600_000_000)
+    #expect(actions.first == .scroll(dx: 0.09375, dy: 0, phase: .began))
 
     // A finger still for 700 ms and only then moving: click-and-drag.
     var planted = GestureRecognizer(config: GestureConfig())
     _ = planted.handle([ContactEvent(id: 0, phase: .began, x: 0.5, y: 0.5)], atNs: 0)
-    let holdActions = planted.handle([ContactEvent(id: 0, phase: .moved, x: 0.5625, y: 0.5)], atNs: 700_000_000)
+    let holdActions = planted.handle([ContactEvent(id: 0, phase: .moved, x: 0.65, y: 0.5)], atNs: 700_000_000)
     #expect(holdActions.first == .dragBegan(at: PanelPoint(x: 0.5, y: 0.5), hold: true))
 }

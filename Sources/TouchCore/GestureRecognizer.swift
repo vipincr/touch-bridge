@@ -115,10 +115,11 @@ public struct GestureConfig: Codable, Equatable, Sendable {
     /// this radius (touch slop), so settling wobble on glass doesn't turn a hold into a drag.
     /// Classification of a scroll or drag needs travel beyond it.
     public var holdSlopMm = 8.0
-    /// The stationary radius grows with hold time at this rate, so a long press tolerates the
-    /// finger's slow drift while a deliberate swipe (an order of magnitude faster) still
-    /// classifies within a fraction of a second.
-    public var holdDriftMmPerS = 10.0
+    /// The stationary radius is flat for the first 150 ms (so a deliberate swipe classifies
+    /// instantly), then grows with hold time at this rate: a planted finger's creep and wobble
+    /// stays inside it for seconds, while intentional movement (an order of magnitude faster)
+    /// still crosses it quickly.
+    public var holdDriftMmPerS = 25.0
     public var doubleTapRadiusMm = 8.0
     public var doubleTapIntervalNs: UInt64 = 500_000_000
     public var longPressNs: UInt64 = 500_000_000
@@ -134,6 +135,11 @@ public struct GestureConfig: Codable, Equatable, Sendable {
     public var maxContacts = 3
     public var velocityWindowNs: UInt64 = 100_000_000
     public var velocityStaleNs: UInt64 = 50_000_000
+    /// When a drag's contact lifts, the press is held this long before it is committed, and a
+    /// finger returning within `dragResumeRadiusMm` resumes the drag seamlessly. WCH contacts
+    /// flap during a press; without the grace, a slow drag shatters into grabs at new points.
+    public var dragGraceNs: UInt64 = 150_000_000
+    public var dragResumeRadiusMm = 20.0
 
     public init() {}
 }
@@ -142,6 +148,9 @@ public struct GestureConfig: Codable, Equatable, Sendable {
 /// so delivery can pick Direct or Warp once per gesture.
 public struct GestureRecognizer: Sendable {
     private enum Lock: Sendable { case scroll, pinch, rotate, edge }
+
+    /// What a held press resumes as, after a flapped contact returns.
+    private enum DragKind: Sendable { case drag, pan }
 
     private struct TwoFinger: Sendable {
         var ids: (UInt8, UInt8)
@@ -188,6 +197,9 @@ public struct GestureRecognizer: Sendable {
         case dragging(id: UInt8, last: PanelPoint)
         /// One-finger scroll (scroll mode).
         case panning(id: UInt8, last: PanelPoint, samples: [(ns: UInt64, point: PanelPoint)])
+        /// A drag whose contact lifted: the press is held until `untilNs`, resuming if a finger
+        /// returns nearby (a WCH contact flap), committed as a real end otherwise.
+        case dragGrace(kind: DragKind, last: PanelPoint, untilNs: UInt64, samples: [(ns: UInt64, point: PanelPoint)])
         case twoFinger(TwoFinger)
         case threeFinger(ThreeFinger)
         case multiFinger(MultiFinger)
@@ -255,6 +267,12 @@ public struct GestureRecognizer: Sendable {
     public mutating func handle(_ events: [ContactEvent], atNs now: UInt64) -> [GestureAction] {
         if config.drawingMode { return draw(events) }
         var actions: [GestureAction] = []
+        // A drag grace past its deadline commits the held press, even with no contact events to
+        // carry it (the pipeline pumps this with an empty event list from its timer).
+        if case let .dragGrace(kind, last, until, samples) = state, now >= until {
+            state = .idle
+            actions.append(graceEnd(kind, last: last, samples: samples, now: now))
+        }
         twoFingerMoved = false
         threeFingerMoved = false
         multiFingerMoved = false
@@ -270,7 +288,7 @@ public struct GestureRecognizer: Sendable {
                     state = .multiFinger(multi)
                     continue
                 }
-                actions += cancel()
+                actions += cancel(now: now)
                 continue
             }
             actions += step(event, point, now)
@@ -329,7 +347,7 @@ public struct GestureRecognizer: Sendable {
                 return []
             }
             switch event.phase {
-            case .moved where distanceMm(point, origin) > config.holdSlopMm + Double(now - downNs) / 1e9 * config.holdDriftMmPerS:
+            case .moved where distanceMm(point, origin) > config.holdSlopMm + max(0, Double(now - downNs) / 1e9 - 0.15) * config.holdDriftMmPerS:
                 // A click-and-drag needs a still finger first: the linger before the first real
                 // movement separates hold-drag from a slow natural swipe, which scrolls.
                 let firstMove = firstMoveNs ?? now
@@ -357,6 +375,9 @@ public struct GestureRecognizer: Sendable {
             case .moved:
                 state = .dragging(id: id, last: point)
                 return [.dragMoved(to: point)]
+            case .ended where config.dragGraceNs > 0:
+                state = .dragGrace(kind: .drag, last: point, untilNs: now + config.dragGraceNs, samples: [])
+                return []
             case .ended:
                 state = active.isEmpty ? .idle : .ignoring
                 return [.dragEnded(at: point)]
@@ -372,11 +393,37 @@ public struct GestureRecognizer: Sendable {
                 kept.append((now, point))
                 state = .panning(id: id, last: point, samples: kept)
                 return [.scroll(dx: point.x - last.x, dy: point.y - last.y, phase: .changed)]
+            case .ended where config.dragGraceNs > 0:
+                state = .dragGrace(kind: .pan, last: point, untilNs: now + config.dragGraceNs, samples: samples)
+                return []
             case .ended:
                 state = active.isEmpty ? .idle : .ignoring
                 let v = velocity(samples, now)
                 return [.scrollEnded(velocityX: v.x, velocityY: v.y)]
             case .began:
+                return []
+            }
+
+        case let .dragGrace(kind, last, untilNs, samples):
+            switch event.phase {
+            case .began where now < untilNs && distanceMm(point, last) <= config.dragResumeRadiusMm:
+                // The finger came back (a contact flap): the press never happened to end.
+                switch kind {
+                case .drag:
+                    state = .dragging(id: event.id, last: point)
+                    return point != last ? [.dragMoved(to: point)] : []
+                case .pan:
+                    var kept = samples.filter { now - $0.ns <= config.velocityWindowNs }
+                    kept.append((now, point))
+                    state = .panning(id: event.id, last: point, samples: kept)
+                    return [.scroll(dx: point.x - last.x, dy: point.y - last.y, phase: .changed)]
+                }
+            case .began:
+                // A touch somewhere else: the held press ends, the new touch starts fresh.
+                let actions = [graceEnd(kind, last: last, samples: samples, now: now)]
+                state = active.count > contactLimit ? .ignoring : .oneFinger(id: event.id, downNs: now, origin: point, current: point, firstMoveNs: nil)
+                return actions
+            case .moved, .ended:
                 return []
             }
 
@@ -684,10 +731,22 @@ public struct GestureRecognizer: Sendable {
 
     // MARK: palm
 
-    private mutating func cancel() -> [GestureAction] {
+    /// The action that commits a held press whose grace ran out (or was cut short).
+    private func graceEnd(_ kind: DragKind, last: PanelPoint, samples: [(ns: UInt64, point: PanelPoint)], now: UInt64) -> GestureAction {
+        switch kind {
+        case .drag:
+            return .dragEnded(at: last)
+        case .pan:
+            let v = velocity(samples, now)
+            return .scrollEnded(velocityX: v.x, velocityY: v.y)
+        }
+    }
+
+    private mutating func cancel(now: UInt64) -> [GestureAction] {
         let actions: [GestureAction]
         switch state {
         case let .dragging(_, last): actions = [.dragEnded(at: last)]
+        case let .dragGrace(kind, last, _, samples): actions = [graceEnd(kind, last: last, samples: samples, now: now)]
         case let .threeFinger(t) where t.dragging: actions = [.dragEnded(at: t.lastAnchor)]
         case let .multiFinger(m) where m.lock != nil: actions = [.dockSwipeCancelled(m.lock!)]
         case .panning: actions = [.scrollEnded(velocityX: 0, velocityY: 0)]

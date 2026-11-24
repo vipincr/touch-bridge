@@ -71,7 +71,7 @@ private struct Script {
 }
 
 @Test func movingBeyondTheSlopEarlyStartsADragFromTheTouchDownPoint() {
-    var s = Script()
+    var s = Script(configure: { $0.dragGraceNs = 0 })
     s.at(0, began(0, 0.3, 0.3))
     s.at(50, moved(0, 0.3 + mmX(12), 0.3))
     s.at(70, moved(0, 0.3 + mmX(20), 0.3))
@@ -87,7 +87,7 @@ private struct Script {
 @Test func holdThenMoveIsAHoldDrag() {
     var s = Script()
     s.at(0, began(0, 0.3, 0.3))
-    s.at(600, moved(0, 0.3 + mmX(20), 0.3))
+    s.at(600, moved(0, 0.3 + mmX(24), 0.3))
     #expect(s.actions.first == .dragBegan(at: PanelPoint(x: 0.3, y: 0.3), hold: true))
 }
 
@@ -212,7 +212,7 @@ private struct Script {
 // MARK: one-finger drag mode
 
 @Test func inScrollModeAOneFingerPanScrollsWithMomentum() throws {
-    var s = Script(oneFingerDrag: .scroll)
+    var s = Script(oneFingerDrag: .scroll, configure: { $0.dragGraceNs = 0 })
     s.at(0, began(0, 0.5, 0.5))
     s.at(30, moved(0, 0.5, 0.5 + mmY(5)))
     s.at(40, moved(0, 0.5, 0.5 + mmY(12)))
@@ -229,7 +229,7 @@ private struct Script {
 @Test func inScrollModeHoldThenMoveIsStillClickAndDrag() {
     var s = Script(oneFingerDrag: .scroll)
     s.at(0, began(0, 0.3, 0.3))
-    s.at(600, moved(0, 0.3 + mmX(20), 0.3))
+    s.at(600, moved(0, 0.3 + mmX(24), 0.3))
     #expect(s.actions.first == .dragBegan(at: PanelPoint(x: 0.3, y: 0.3), hold: true))
 }
 
@@ -597,4 +597,53 @@ private let fourStart: [(Double, Double)] = [(0.4, 0.5), (0.45, 0.5), (0.5, 0.5)
     #expect(s.actions.isEmpty, "slow drift stays a stationary hold")
     s.at(1250, ended(0, 0.4 + mmX(12), 0.4))
     #expect(s.actions == [.rightClick(at: PanelPoint(x: 0.4 + mmX(12), y: 0.4))])
+}
+
+
+// MARK: drag grace (WCH contacts flap mid-drag)
+
+@Test func aFlappedDragResumesWithoutReGrabbing() {
+    var s = Script(configure: { $0.dragGraceNs = 150_000_000 })
+    s.at(0, began(0, 0.3, 0.3))
+    s.at(50, moved(0, 0.3 + mmX(12), 0.3))
+    s.at(70, moved(0, 0.3 + mmX(20), 0.3))
+    s.at(80, ended(0, 0.3 + mmX(20), 0.3))          // the contact flaps off mid-drag
+    s.at(140, began(1, 0.3 + mmX(24), 0.3), moved(1, 0.3 + mmX(30), 0.3))   // it returns, renumbered
+    s.at(400, ended(1, 0.3 + mmX(30), 0.3))
+    s.at(600)                                        // nothing: the grace deadline passes quietly
+    #expect(s.actions == [
+        .dragBegan(at: PanelPoint(x: 0.3, y: 0.3), hold: false),
+        .dragMoved(to: PanelPoint(x: 0.3 + mmX(12), y: 0.3)),
+        .dragMoved(to: PanelPoint(x: 0.3 + mmX(20), y: 0.3)),
+        .dragMoved(to: PanelPoint(x: 0.3 + mmX(24), y: 0.3)),
+        .dragMoved(to: PanelPoint(x: 0.3 + mmX(30), y: 0.3)),
+        .dragEnded(at: PanelPoint(x: 0.3 + mmX(30), y: 0.3)),
+    ])
+}
+
+@Test func anUnresumedDragEndsWhenTheGracePasses() {
+    var s = Script(configure: { $0.dragGraceNs = 150_000_000 })
+    s.at(0, began(0, 0.3, 0.3))
+    s.at(50, moved(0, 0.3 + mmX(12), 0.3))
+    s.at(60, ended(0, 0.3 + mmX(12), 0.3))
+    #expect(s.actions.last == .dragMoved(to: PanelPoint(x: 0.3 + mmX(12), y: 0.3)))
+    s.at(100)   // inside the grace: still held
+    #expect(s.actions.count == 2)
+    s.at(220)   // past the grace: the press commits
+    #expect(s.actions.last == .dragEnded(at: PanelPoint(x: 0.3 + mmX(12), y: 0.3)))
+}
+
+@Test func aFlappedScrollResumesWithTheSameStream() {
+    var s = Script(oneFingerDrag: .scroll, configure: { $0.dragGraceNs = 150_000_000 })
+    s.at(0, began(0, 0.5, 0.5))
+    s.at(40, moved(0, 0.5, 0.5 + mmY(12)))
+    s.at(50, ended(0, 0.5, 0.5 + mmY(12)))
+    s.at(120, began(2, 0.5, 0.5 + mmY(16)))
+    s.at(300, ended(2, 0.5, 0.5 + mmY(16)))
+    s.at(500)
+    guard case let .scroll(_, dy0, phase0) = s.actions.first else { Issue.record("expected scroll began"); return }
+    #expect(phase0 == .began && abs(dy0 - mmY(12)) < 1e-9)
+    guard case let .scroll(_, dy1, phase1) = s.actions[1] else { Issue.record("expected scroll changed on resume"); return }
+    #expect(phase1 == .changed && abs(dy1 - mmY(4)) < 1e-9)
+    guard case .scrollEnded = s.actions.last else { Issue.record("expected scrollEnded"); return }
 }

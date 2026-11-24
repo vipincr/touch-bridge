@@ -251,6 +251,10 @@ public final class InputPipeline: @unchecked Sendable {
             guard let self else { return }
             let now = Self.nanoseconds(mach_absolute_time())
             process(tracker.expire(atNs: now), now: now)
+            // Pump the recognizer so a drag grace past its deadline commits without new events.
+            if activeInputMode != .multitouch {
+                for action in recognizer.handle([], atNs: now) { route(action) }
+            }
             // TUIO clients expect a frame now and then even while nothing touches (once a second).
             if activeInputMode == .multitouch, contacts.isEmpty {
                 tuioIdleTicks += 1
