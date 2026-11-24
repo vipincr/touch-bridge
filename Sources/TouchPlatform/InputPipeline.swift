@@ -25,8 +25,15 @@ public struct PipelineSettings: Sendable {
     public var swipeBetweenPages = true
     /// Gestures (default), drawing (one finger is a pen), or multitouch (every finger as TUIO, nothing else).
     public var inputMode: InputMode = .gestures
-    public var displayVendor: UInt32 = 7908
-    public var displayModel: UInt32 = 342
+    /// The touch panel's active area in millimetres, for gesture thresholds (JAPANNEXT
+    /// JN-MD-IPST105FP: 10.5-inch 3:2, 1920×1280 → 221.9 × 147.9 mm). Applied to every recognizer.
+    public var panelWidthMm = 221.9
+    public var panelHeightMm = 147.9
+    /// The touch display's EDID identity (JN-MD-IPST105FP: manufacturer "RTK" = 0x4A8B, product
+    /// 0x2222). A display matching both is used; when none does, the pipeline falls back to the
+    /// single external display (see `refreshDisplay`), so an unlisted panel still works.
+    public var displayVendor: UInt32 = 19_083
+    public var displayModel: UInt32 = 8_738
 
     public init() {}
 }
@@ -58,6 +65,9 @@ public final class InputPipeline: @unchecked Sendable {
     private var touchCount = 0
     private var maxTouchCount = 0
     private var panelMode = PanelModeWatch()
+    private var touchFilter = SingleTouchFilter()
+    /// When the last digitizer frame arrived; mouse-emulation frames newer than this are dropped.
+    private var lastDigitizerFrameNs: UInt64 = 0
     /// The window-drag answer for the gesture being classified, so Accessibility is asked once.
     private var windowDragMemo: (point: CGPoint, result: Bool)?
     /// The touch display's UUID, as the window server names displays in its Space state.
@@ -175,6 +185,8 @@ public final class InputPipeline: @unchecked Sendable {
         recognizer.threeFingerDrag = settings.threeFingerDrag
         recognizer.threeFingerAnchor = settings.threeFingerAnchor
         recognizer.drawingMode = settings.inputMode == .drawing
+        recognizer.panelWidthMm = settings.panelWidthMm
+        recognizer.panelHeightMm = settings.panelHeightMm
         if let trackpad = settings.trackpad {
             recognizer.apply(trackpad)
             deliverer.momentumEnabled = trackpad.momentum
@@ -209,16 +221,27 @@ public final class InputPipeline: @unchecked Sendable {
     private func handle(report bytes: [UInt8], timestamp: UInt64) {
         guard let frame = ReportParser.parse(bytes) else { return }
         let now = Self.nanoseconds(timestamp)
+        if frame.source == .digitizer { lastDigitizerFrameNs = now }
+        // Once digitizer frames flow, the panel's mouse emulation is trailing off: ignore it, so
+        // one finger is not delivered twice (as a digitizer contact and as contact id 0).
+        if frame.source == .mouse, now - lastDigitizerFrameNs < 1_000_000_000 { return }
+        // A WCH panel not yet switched to digitizer mode streams single touch on its mouse
+        // interface (after a replug, until the unlock lands); that is its normal input then.
+        if source.family == .wch, frame.source == .mouse { panelMode.mouseModeIsNormal = true }
         switch panelMode.observe(frame.source, atNs: now) {
         case .requestMultitouch:
             status("panel is sending single-touch (mouse) reports; asking it for multitouch")
             source.requestMultitouchMode()
         case .multitouchRestored:
             status("panel sends multitouch reports again")
+            panelMode.mouseModeIsNormal = false
         case nil:
             break
         }
-        process(tracker.update(frame, atNs: now), now: now)
+        // A single-contact stream teleports between fingers: split jumps into lift + fresh touch.
+        for frame in touchFilter.filter(frame, panelWidthMm: settings.panelWidthMm, panelHeightMm: settings.panelHeightMm) {
+            process(tracker.update(frame, atNs: now), now: now)
+        }
     }
 
     private func startExpiryTimer() {
@@ -641,8 +664,17 @@ public final class InputPipeline: @unchecked Sendable {
         CGGetOnlineDisplayList(0, nil, &count)
         var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
         CGGetOnlineDisplayList(count, &ids, &count)
-        let found = ids.prefix(Int(count)).first {
+        var found = ids.prefix(Int(count)).first {
             CGDisplayVendorNumber($0) == settings.displayVendor && CGDisplayModelNumber($0) == settings.displayModel
+        }
+        if found == nil {
+            // An unlisted panel (the JN-MD-IPST105FP before its EDID numbers are pinned here):
+            // with exactly one external display there is nothing to confuse the touch display with.
+            let external = ids.prefix(Int(count)).filter { CGDisplayIsBuiltin($0) == 0 }
+            if external.count == 1 {
+                found = external.first
+                status("touch display: EDID \(settings.displayVendor)/\(settings.displayModel) matched nothing; using the only external display")
+            }
         }
         touchDisplayUUID = found.flatMap(SystemDisplays.uuid)
         guard let id = found else {

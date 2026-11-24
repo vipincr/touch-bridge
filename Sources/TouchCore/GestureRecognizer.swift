@@ -176,7 +176,7 @@ public struct GestureRecognizer: Sendable {
 
     private enum State: Sendable {
         case idle
-        case oneFinger(id: UInt8, downNs: UInt64, origin: PanelPoint, current: PanelPoint)
+        case oneFinger(id: UInt8, downNs: UInt64, origin: PanelPoint, current: PanelPoint, firstMoveNs: UInt64?)
         case dragging(id: UInt8, last: PanelPoint)
         /// One-finger scroll (scroll mode).
         case panning(id: UInt8, last: PanelPoint, samples: [(ns: UInt64, point: PanelPoint)])
@@ -207,6 +207,15 @@ public struct GestureRecognizer: Sendable {
     public var drawingMode: Bool {
         get { config.drawingMode }
         set { config.drawingMode = newValue }
+    }
+    /// The panel's active area, set by the pipeline from the panel profile; thresholds are in mm.
+    public var panelWidthMm: Double {
+        get { config.panelWidthMm }
+        set { config.panelWidthMm = newValue }
+    }
+    public var panelHeightMm: Double {
+        get { config.panelHeightMm }
+        set { config.panelHeightMm = newValue }
     }
     /// Follow the trackpad's gesture switches (three-finger drag, scroll, pinch, rotate).
     public mutating func apply(_ trackpad: TrackpadPreferences) {
@@ -279,12 +288,12 @@ public struct GestureRecognizer: Sendable {
         switch state {
         case .idle:
             if event.phase == .began {
-                state = .oneFinger(id: event.id, downNs: now, origin: point, current: point)
+                state = .oneFinger(id: event.id, downNs: now, origin: point, current: point, firstMoveNs: nil)
                 restingExtras = [:]
             }
             return []
 
-        case let .oneFinger(id, downNs, origin, current):
+        case let .oneFinger(id, downNs, origin, current, firstMoveNs):
             if event.id != id {
                 // The first finger is still (it would have left this state after moving past the tap slop).
                 switch event.phase {
@@ -313,7 +322,10 @@ public struct GestureRecognizer: Sendable {
             }
             switch event.phase {
             case .moved where distanceMm(point, origin) > config.tapSlopMm:
-                let hold = now - downNs >= config.longPressNs
+                // A click-and-drag needs a still finger first: the linger before the first real
+                // movement separates hold-drag from a slow natural swipe, which scrolls.
+                let firstMove = firstMoveNs ?? now
+                let hold = firstMove - downNs >= config.longPressNs
                 if !hold, config.oneFingerDrag == .scroll, !(dragZone?(origin) ?? false) {
                     state = .panning(id: id, last: point, samples: [(downNs, origin), (now, point)])
                     return [.scroll(dx: point.x - origin.x, dy: point.y - origin.y, phase: .began)]
@@ -321,7 +333,8 @@ public struct GestureRecognizer: Sendable {
                 state = .dragging(id: id, last: point)
                 return [.dragBegan(at: origin, hold: hold), .dragMoved(to: point)]
             case .moved, .began:
-                state = .oneFinger(id: id, downNs: downNs, origin: origin, current: point)
+                let firstMove = firstMoveNs ?? (distanceMm(point, origin) > 1 ? now : nil)
+                state = .oneFinger(id: id, downNs: downNs, origin: origin, current: point, firstMoveNs: firstMove)
                 return []
             case .ended:
                 state = active.isEmpty ? .idle : .ignoring

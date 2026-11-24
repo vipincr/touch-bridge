@@ -23,28 +23,53 @@ public struct TouchFrame: Equatable, Sendable {
     public let scanTime: UInt32?
 }
 
-/// Decodes ILITEK-TOUCH (USB 0x222A:0x0001) input reports, layout taken from its HID report descriptor.
+/// Decodes the multitouch digitizer input reports of the two supported controller families.
+/// One decoder per wire format; the report ID says which panel is talking.
 public enum ReportParser {
-    static let logicalMaxX = 16384.0
-    static let logicalMaxY = 9600.0
+    /// WCH (wch.cn, USB 0x27C0:0x0859 — the JAPANNEXT JN-MD-IPST105FP), from its HID report
+    /// descriptor: RID 0x0D, ten 5-byte slots (tip switch at bit 0, contact id at bits 4-7,
+    /// X and Y as little-endian 16-bit up to 16383 / 9599), then scan time LE16 and contact
+    /// count; 54 bytes in total.
+    static let wchReportID: UInt8 = 0x0D
+    static let wchReportLength = 54
+    static let wchScanTimeOffset = 51
+    static let wchContactCountOffset = 53
+    static let wchSlotSize = 5
+    static let wchMaxSlots = 10
+    static let wchLogicalMaxX = 16383.0
+    static let wchLogicalMaxY = 9599.0
 
-    // RID 4: 10 slots of 5 bytes from byte 1, ScanTime LE32 @51, ContactCount @55, 64 bytes total.
-    static let digitizerReportID: UInt8 = 0x04
-    static let digitizerReportLength = 64
-    static let slotCount = 10
-    static let slotSize = 5
-    static let scanTimeOffset = 51
-    static let contactCountOffset = 55
+    /// ILITEK (USB 0x222A:0x0001 — the upstream ARZOPA reference panel): RID 4, N slots of 5
+    /// bytes (contact id at bits 0-5, tip switch at 0x40, X and Y LE16 up to 16384 / 9600), then
+    /// scan time LE32 and contact count. N is the panel's contact limit and varies: the 10-contact
+    /// ARZOPA pads its report to 64 bytes; shorter ILITEK-family panels send shorter reports, so
+    /// the slot count is derived from each report's own length and capped at 10.
+    static let ilitekReportID: UInt8 = 0x04
+    static let ilitekReportMinLength = 11
+    static let ilitekSlotSize = 5
+    static let ilitekMaxSlots = 10
+    static let ilitekLogicalMaxX = 16384.0
+    static let ilitekLogicalMaxY = 9600.0
 
-    // RID 5: buttons @1, X LE16 @2, Y LE16 @4.
+    /// WCH mouse interface (single touch on macOS, the digitizer interface being firmware-gated):
+    /// RID 7, buttons @1, X LE16 @2 (logical 0-16383), Y LE16 @4 (logical 0-9599), wheel @6 —
+    /// extents confirmed from the interface's own report descriptor.
+    static let wchMouseReportID: UInt8 = 0x07
+    static let wchMouseReportLength = 7
+
+    /// ILITEK mouse fallback: RID 5, buttons @1, X LE16 @2, Y LE16 @4.
     static let mouseReportID: UInt8 = 0x05
     static let mouseReportLength = 6
 
     public static func parse(_ bytes: [UInt8]) -> TouchFrame? {
         guard let reportID = bytes.first else { return nil }
         switch reportID {
-        case digitizerReportID where bytes.count >= digitizerReportLength:
-            return parseDigitizer(bytes)
+        case wchReportID where bytes.count >= wchReportLength:
+            return parseWCH(bytes)
+        case wchMouseReportID where bytes.count >= wchMouseReportLength:
+            return parseWCHMouse(bytes)
+        case ilitekReportID where bytes.count >= ilitekReportMinLength:
+            return parseILITEK(bytes)
         case mouseReportID where bytes.count >= mouseReportLength:
             return parseMouse(bytes)
         default:
@@ -52,15 +77,45 @@ public enum ReportParser {
         }
     }
 
-    private static func parseDigitizer(_ r: [UInt8]) -> TouchFrame {
+    private static func parseWCHMouse(_ r: [UInt8]) -> TouchFrame {
+        TouchFrame(
+            source: .mouse,
+            contacts: [Contact(
+                id: 0,
+                touching: r[1] & 0x01 != 0,
+                x: normalize(le16(r, 2), wchLogicalMaxX),
+                y: normalize(le16(r, 4), wchLogicalMaxY)
+            )],
+            scanTime: nil
+        )
+    }
+
+    private static func parseWCH(_ r: [UInt8]) -> TouchFrame {
+        let count = min(Int(r[wchContactCountOffset]), wchMaxSlots)
+        let contacts = (0..<count).map { slot -> Contact in
+            let base = 1 + slot * wchSlotSize
+            return Contact(
+                id: r[base] >> 4,
+                touching: r[base] & 0x01 != 0,
+                x: normalize(le16(r, base + 1), wchLogicalMaxX),
+                y: normalize(le16(r, base + 3), wchLogicalMaxY)
+            )
+        }
+        return TouchFrame(source: .digitizer, contacts: contacts, scanTime: UInt32(le16(r, wchScanTimeOffset)))
+    }
+
+    private static func parseILITEK(_ r: [UInt8]) -> TouchFrame {
+        let slotCount = min((r.count - 6) / ilitekSlotSize, ilitekMaxSlots)
+        let scanTimeOffset = 1 + slotCount * ilitekSlotSize
+        let contactCountOffset = scanTimeOffset + 4
         let count = min(Int(r[contactCountOffset]), slotCount)
         let contacts = (0..<count).map { slot -> Contact in
-            let base = 1 + slot * slotSize
+            let base = 1 + slot * ilitekSlotSize
             return Contact(
                 id: r[base] & 0x3F,
                 touching: r[base] & 0x40 != 0,
-                x: normalize(le16(r, base + 1), logicalMaxX),
-                y: normalize(le16(r, base + 3), logicalMaxY)
+                x: normalize(le16(r, base + 1), ilitekLogicalMaxX),
+                y: normalize(le16(r, base + 3), ilitekLogicalMaxY)
             )
         }
         let scanTime = (0..<4).reduce(UInt32(0)) { $0 | UInt32(r[scanTimeOffset + $1]) << (8 * UInt32($1)) }
@@ -71,8 +126,8 @@ public enum ReportParser {
         let contact = Contact(
             id: 0,
             touching: r[1] & 0x01 != 0,
-            x: normalize(le16(r, 2), logicalMaxX),
-            y: normalize(le16(r, 4), logicalMaxY)
+            x: normalize(le16(r, 2), ilitekLogicalMaxX),
+            y: normalize(le16(r, 4), ilitekLogicalMaxY)
         )
         return TouchFrame(source: .mouse, contacts: [contact], scanTime: nil)
     }

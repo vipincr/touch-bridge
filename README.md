@@ -8,7 +8,7 @@ TouchBridge is a small menu-bar app that runs in user space:
 - No kernel or system extension, no root, and System Integrity Protection stays on.
 - Quitting it hands the panel back to macOS.
 
-> **Hardware note:** TouchBridge was built for, and tested with, one touch monitor. The gesture engine is generic, but the input layer needs adapting for other panels. See [Hardware support](#hardware-support).
+> **Hardware note:** this fork is maintained for the JAPANNEXT **JN-MD-IPST105FP** touch panel, and the input layer auto-detects USB HID touch-screen digitizers by class. See [Hardware support](#hardware-support).
 
 ## Contents
 
@@ -124,18 +124,22 @@ The top line shows fingers now and the most at once. Clear wipes the canvas.
 
 | | |
 |---|---|
-| Touch monitor | ARZOPA portable touch monitor, 1920×1080 |
-| Touch controller | ILITEK, USB `0x222A:0x0001`, HID multitouch digitizer, 10 contacts |
-| Mac | MacBook Pro (Apple silicon, M3 Max), macOS 15.7 |
+| Touch monitor | JAPANNEXT **JN-MD-IPST105FP**, 10.5-inch IPS, 1920×1280, 5-point touch |
+| Touch controller | WCH (wch.cn) `0x27C0:0x0859` — **full multitouch** after the Input Mode unlock, see the note below; ILITEK `0x222A:0x0001` unchanged |
+| Mac | MacBook Pro (Apple silicon), macOS 26 |
 
-**Other touchscreens are not supported out of the box.** Everything above the input layer is generic: gesture recognition, delivery to apps, system gestures, page swipes and settings. The input layer, though, is tailored to the tested panel in four places:
+The upstream project's reference panel (ARZOPA 1920×1080, ILITEK `0x222A:0x0001`, 10 contacts) keeps working through the same code paths.
 
-1. **The USB IDs** TouchBridge looks for (`0x222A:0x0001`).
-2. **The report format**: this controller's byte layout for touch reports, and the feature reads that switch it from single-touch "mouse" mode into multitouch mode after a power cycle.
-3. **The display**: the touch monitor is found by its EDID vendor and model numbers.
-4. **The physical size** of the panel, used for gesture thresholds in millimetres.
+**What the input layer does automatically now:**
 
-Portable touch monitors often use ILITEK controllers. If yours reports the same USB IDs, it may only need the display numbers changed. Other panels need the report parser adapted. [Adapting to another touchscreen](#adapting-to-another-touchscreen) walks through each step.
+1. **Device discovery** matches any USB HID touch-screen digitizer (usage page 0x0D, usage touch screen), excluding Apple's own devices, and logs the product name and USB IDs of what it seized.
+2. **The report format** (ILITEK family) derives the contact-slot count from each report's own length, so 10-contact panels padded to 64 bytes and shorter 5-contact reports both parse.
+3. **The display** is found by its EDID vendor and model numbers when they match, and otherwise falls back to the single external display — an unlisted panel works without editing anything.
+4. **The physical size** used for gesture thresholds defaults to the JN-MD-IPST105FP's active area (221.9 × 147.9 mm) and is set in one place (`PipelineSettings`).
+
+Panels whose controllers use a different report layout than the ILITEK family still need the parser adapted. [Adapting to another touchscreen](#adapting-to-another-touchscreen) walks through each step.
+
+**WCH panels need an Input Mode unlock, then give full multitouch on macOS.** WCH controllers boot in single-touch mouse emulation and stream their digitizer interface — up to ten fingers, with every gesture in the table above — only after the host writes the Input Mode feature report, the same thing Windows does during enumeration and macOS never does. TouchBridge writes it at every panel attach. Two protocol details matter and were learned the hard way (ours, and the community's before it; confirmed against [Touch-Up issue #40](https://github.com/shueber/Touch-Up/issues/40), where this controller family multitouches on macOS 27): the feature payload goes out **without** the report ID in the buffer, and the write must happen **before** input reports are registered — afterwards the digitizer interface stays silent. Until the unlock lands (for example in the moment after a replug), TouchBridge reads the panel's single-touch mouse reports so the screen never goes dead, and the digitizer takes over automatically.
 
 ## Requirements
 
@@ -148,7 +152,7 @@ Portable touch monitors often use ILITEK controllers. If yours reports the same 
 
 1. **Clone the repository.**
    ```bash
-   git clone https://github.com/theofanisv/touch-bridge.git
+   git clone https://github.com/vipincr/touch-bridge.git
    ```
    ```bash
    cd touch-bridge
@@ -248,11 +252,11 @@ The design history is in `docs/`, including findings, experiments that failed an
 
 You'll change a few constants and possibly the report parser, then rebuild.
 
-1. **Find the panel's USB IDs.** Open System Information → USB, or run:
+1. **Check the panel enumerates as a digitizer.** Discovery is by HID class, so there are no USB IDs to set: any USB touch-screen digitizer is matched. Open System Information → USB, or run:
    ```bash
    ioreg -p IOUSB -l -w0 | grep -E '"USB Product Name"|"idVendor"|"idProduct"'
    ```
-   Set `vendorID` and `productID` in `Sources/TouchPlatform/HIDTouchSource.swift`.
+   TouchBridge logs the product name and USB IDs of whatever it seized.
 
 2. **Record the panel's reports.** With nothing else holding the panel, build with `./scripts/bundle.sh`, then run:
    ```bash
@@ -260,17 +264,21 @@ You'll change a few constants and possibly the report parser, then rebuild.
    ```
    Touch with one, two and three fingers. `~/Library/Logs/TouchBridge/` gets the raw reports (`probe-*.jsonl`) and a summary.
 
-3. **Adapt the parser.** `Sources/TouchCore/ReportParser.swift` decodes the tested panel's layout: report ID 4, ten 5-byte contact slots (ID and tip switch, X and Y as little-endian 16-bit values up to 16384 and 9600), and the contact count at byte 55. Compare it with your recording and your panel's HID report descriptor. Adjust the report ID, slot size, offsets and logical maximums. Add your recording as a replay test next to `Tests/TouchCoreTests/Fixtures/`.
+3. **Adapt the parser.** `Sources/TouchCore/ReportParser.swift` has one decoder per supported controller family: WCH (report ID `0x0D`; the JN-MD-IPST105FP) and ILITEK (report ID 4; the ARZOPA, with the slot count derived from the report length). For another format, read your panel's HID report descriptor:
+   ```bash
+   ioreg -r -n TouchScreen -l -w0 | grep ReportDescriptor
+   ```
+   decode the touch collection (report ID, per-contact field order and sizes, logical maximums, where the contact count lives) and add a decoder alongside the two. Add your recording as a replay test next to `Tests/TouchCoreTests/Fixtures/`.
 
-4. **Point it at your display.** Run the read-only probe:
+4. **Point it at your display.** With exactly one external display, nothing to do: the pipeline falls back to it when no EDID match is configured. To pin it exactly, run the read-only probe:
    ```bash
    open -g -n build/TouchBridge.app --args --ax-probe --menubar
    ```
    `axprobe.log` lists every display with its vendor and model numbers. Set `displayVendor` and `displayModel` in `PipelineSettings` (`Sources/TouchPlatform/InputPipeline.swift`). The self-test in `SystemUISelfTest.swift` uses the same numbers.
 
-5. **Set the physical size.** Set `panelWidthMm` and `panelHeightMm` in `GestureConfig` (`Sources/TouchCore/GestureRecognizer.swift`) to the panel's active area. Gesture thresholds are in millimetres.
+5. **Set the physical size.** Set `panelWidthMm` and `panelHeightMm` in `PipelineSettings` (`Sources/TouchPlatform/InputPipeline.swift`) to the panel's active area. Gesture thresholds are in millimetres.
 
-6. **Check the multitouch switch.** The tested panel needs feature reports 2 and 6 read before it leaves single-touch mode (`requestMultitouchMode` in `HIDTouchSource.swift`). Your panel may need something different, or nothing.
+6. **Check the multitouch switch.** The ILITEK panel needs feature reports 2 and 6 read before it leaves single-touch mode (`requestMultitouchMode` in `HIDTouchSource.swift`); this happens automatically for ILITEK controllers only. WCH controllers need nothing (their standard Input Mode feature defaults to digitizer mode).
 
 7. **Test and install.**
    ```bash
@@ -280,7 +288,7 @@ You'll change a few constants and possibly the report parser, then rebuild.
    ./scripts/install.sh
    ```
 
-Making all of this automatic would be the natural next step: parsing any standard HID multitouch panel from its descriptor, a display picker in the menu, and the physical size from the display's EDID. If you adapt TouchBridge to another panel, please consider sharing the changes.
+Making all of this automatic would be the natural next step: parsing any standard HID multitouch panel from its descriptor (discovery and slot-count handling already are), a display picker in the menu, and the physical size from the display's EDID. If you adapt TouchBridge to another panel, please consider sharing the changes.
 
 ## Logs and diagnostics
 

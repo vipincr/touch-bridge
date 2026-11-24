@@ -58,3 +58,63 @@ private func digitizerReport(_ slots: [(id: UInt8, tip: Bool, x: UInt16, y: UInt
     #expect(ReportParser.parse([0x04, 0x00]) == nil)
     #expect(ReportParser.parse([]) == nil)
 }
+
+/// Builds a 54-byte WCH RID 0x0D report: 10 slots of (tip|id<<4, X LE16, Y LE16), ScanTime LE16 @51, ContactCount @53.
+private func wchReport(_ slots: [(id: UInt8, tip: Bool, x: UInt16, y: UInt16)], count: UInt8? = nil, scanTime: UInt16 = 0) -> [UInt8] {
+    var r = [UInt8](repeating: 0, count: 54)
+    r[0] = 0x0D
+    for (i, s) in slots.enumerated() {
+        let base = 1 + i * 5
+        r[base] = (s.id << 4) | (s.tip ? 0x01 : 0)
+        r[base + 1] = UInt8(s.x & 0xFF); r[base + 2] = UInt8(s.x >> 8)
+        r[base + 3] = UInt8(s.y & 0xFF); r[base + 4] = UInt8(s.y >> 8)
+    }
+    r[51] = UInt8(scanTime & 0xFF); r[52] = UInt8(scanTime >> 8)
+    r[53] = count ?? UInt8(slots.count)
+    return r
+}
+
+@Test func parsesWCHDigitizerReport() throws {
+    let frame = try #require(ReportParser.parse(wchReport([(id: 2, tip: true, x: 16383, y: 9599)], scanTime: 777)))
+    #expect(frame.source == .digitizer)
+    #expect(frame.scanTime == 777)
+    #expect(frame.contacts == [Contact(id: 2, touching: true, x: 1, y: 1)])
+}
+
+@Test func parsesWCHContactIdAndTipNibbleSeparately() throws {
+    let frame = try #require(ReportParser.parse(wchReport([(id: 7, tip: false, x: 0, y: 0)])))
+    #expect(frame.contacts == [Contact(id: 7, touching: false, x: 0, y: 0)])
+}
+
+@Test func parsesOnlyTheWCHReportedNumberOfContacts() throws {
+    let report = wchReport([
+        (id: 0, tip: true, x: 0, y: 0),
+        (id: 1, tip: true, x: 8192, y: 4800),
+        (id: 2, tip: true, x: 16383, y: 9599),
+    ], count: 2)
+    let frame = try #require(ReportParser.parse(report))
+    #expect(frame.contacts.map(\.id) == [0, 1])
+    #expect(frame.contacts.map(\.x) == [0, 8192.0 / 16383.0])
+}
+
+@Test func capsWCHContactCountAtTheTenSlots() throws {
+    let frame = try #require(ReportParser.parse(wchReport([(id: 0, tip: true, x: 1, y: 1)], count: 99)))
+    #expect(frame.contacts.count == 10)
+}
+
+@Test func rejectsShortWCHReports() {
+    #expect(ReportParser.parse([0x0D] + [UInt8](repeating: 0, count: 52)) == nil)
+}
+
+@Test func parsesWCHMouseReportAsOneContact() throws {
+    // RID 7 as captured from the panel: buttons @1, X LE16 @2, Y LE16 @4, wheel @6.
+    let report: [UInt8] = [0x07, 0x01, 0x44, 0x26, 0x01, 0x15, 0x00]
+    let frame = try #require(ReportParser.parse(report))
+    #expect(frame.source == .mouse)
+    #expect(frame.contacts == [Contact(id: 0, touching: true, x: 9796.0 / 16383.0, y: 5377.0 / 9599.0)])
+}
+
+@Test func parsesWCHMouseLift() throws {
+    let frame = try #require(ReportParser.parse([0x07, 0x00, 0x44, 0x26, 0x01, 0x15, 0x00]))
+    #expect(frame.contacts == [Contact(id: 0, touching: false, x: 9796.0 / 16383.0, y: 5377.0 / 9599.0)])
+}

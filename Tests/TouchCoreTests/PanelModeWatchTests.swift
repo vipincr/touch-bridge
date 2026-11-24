@@ -27,3 +27,12 @@ private let s: UInt64 = 1_000_000_000
     #expect(watch.observe(.digitizer, atNs: 0) == nil)
     #expect(watch.observe(.digitizer, atNs: s) == nil)
 }
+
+@Test func mouseModeIsNormalNeverAsksForMultitouch() {
+    var watch = PanelModeWatch()
+    watch.mouseModeIsNormal = true
+    #expect(watch.observe(.mouse, atNs: 0) == nil)
+    #expect(watch.observe(.mouse, atNs: 6 * s) == nil)
+    // Digitizer frames still count as a return to multitouch.
+    #expect(watch.observe(.digitizer, atNs: 7 * s) == .multitouchRestored)
+}

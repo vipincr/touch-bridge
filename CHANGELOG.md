@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.2.0 (2026-11-24) — JAPANNEXT JN-MD-IPST105FP support (vipincr fork)
+
+- **New reference panel: JAPANNEXT JN-MD-IPST105FP** (10.5-inch IPS, 1920×1280, 5 reported contacts).
+  Its WCH controller (`wch.cn`, USB `0x27C0:0x0859`) has its own report decoder: report ID `0x0D`,
+  ten 5-byte slots with the contact id in the high nibble and the tip switch at bit 0, scan time
+  LE16 and contact count at bytes 51/53 — all taken from the panel's live HID report descriptor.
+- **WCH panels give full multitouch on macOS once unlocked.** The controller boots in
+  single-touch mouse emulation; TouchBridge writes the Input Mode feature (report 0x21,
+  payload `[2, 0]` without the report ID in the buffer, before input reports are registered —
+  the ordering and buffer shape are the whole trick, per Touch-Up issue #40) at every panel
+  attach, and the digitizer interface streams up to ten fingers with every gesture. The panel's
+  mouse-emulation reports are kept as a fallback for the moment after a replug (and are dropped
+  once digitizer frames flow), so the screen never goes dead in between.
+- **Panel discovery is by HID class now**, not USB IDs: any USB touch-screen digitizer is matched
+  (Apple's own devices excluded), and what was seized is logged with its product name and USB IDs.
+- **The touch display falls back to the single external display** when its EDID vendor/model match
+  nothing, so an unlisted panel works without editing settings.
+- **Gesture thresholds use the panel's physical size**, set in one place (`PipelineSettings`,
+  defaulting to the JN-MD-IPST105FP's 221.9 × 147.9 mm active area).
+- The ILITEK path (ARZOPA, USB `0x222A:0x0001`) keeps working: same parser, plus the slot count
+  now derives from the report length for shorter ILITEK-family panels. The ILITEK single-touch
+  recovery feature reads only apply to ILITEK controllers.
+- Unit tests for the WCH report format.
+
 ## 1.1.0 (2026-10-11)
 
 - **Touch Mode menu** (✋ → Touch Mode). It resets to Gestures at each start, and the menu-bar icon shows a special mode.
