@@ -229,7 +229,9 @@ public final class HIDTouchSource: @unchecked Sendable {
 
     static func describe(_ result: IOReturn) -> String {
         switch result {
-        case kIOReturnNotPermitted: "kIOReturnNotPermitted (grant Accessibility, then relaunch)"
+        // Opening a mouse or keyboard interface is what Input Monitoring governs; a digitizer
+        // interface opens without it.
+        case kIOReturnNotPermitted: "kIOReturnNotPermitted (grant Input Monitoring, then relaunch)"
         case kIOReturnExclusiveAccess: "kIOReturnExclusiveAccess (another app holds the panel)"
         default: String(format: "0x%08X", UInt32(bitPattern: result))
         }

@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import IOKit.hid
 import TouchCore
 import TouchPlatform
 
@@ -69,15 +70,26 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--enable-login-item"), !LoginItem.isLaunchdInstance {
             if enableLoginItem() { return }
         }
+        // Two permissions, each asked for once per launch with the system prompt. Accessibility lets
+        // the app post events; Input Monitoring lets it seize the panel's mouse interface. A panel with
+        // only a digitizer interface works without the second, so the app starts either way and
+        // relaunches when a missing one arrives.
+        let monitoring = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted
+        if !monitoring { IOHIDRequestAccess(kIOHIDRequestTypeListenEvent) }
         // "AXTrustedCheckOptionPrompt" is the value of kAXTrustedCheckOptionPrompt.
-        if AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary) {
+        let accessibility = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+        if accessibility {
             setEnabled(true)
         } else {
             panelLine.title = "Panel: waiting for Accessibility permission"
-            log.write("Accessibility not granted; prompted, waiting")
+        }
+        if !accessibility { log.write("Accessibility not granted; prompted, waiting") }
+        if !monitoring { log.write("Input Monitoring not granted; prompted, waiting") }
+        if !accessibility || !monitoring {
             permissionTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
                 Task { @MainActor [weak self] in
-                    guard AXIsProcessTrusted() else { return }
+                    guard AXIsProcessTrusted(),
+                          IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted else { return }
                     self?.relaunch()
                 }
             }
@@ -435,7 +447,7 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
     /// Privacy grants only reach a new process, so start a fresh copy and exit.
     private func relaunch() {
         permissionTimer?.invalidate()
-        log.write("Accessibility granted; relaunching")
+        log.write("Accessibility and Input Monitoring granted; relaunching")
         if LoginItem.isLaunchdInstance {
             // A failure exit makes launchd start a fresh process (which sees the new permission).
             SingleInstance.release()

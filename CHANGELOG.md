@@ -6,13 +6,22 @@
   Its WCH controller (`wch.cn`, USB `0x27C0:0x0859`) has its own report decoder: report ID `0x0D`,
   ten 5-byte slots with the contact id in the high nibble and the tip switch at bit 0, scan time
   LE16 and contact count at bytes 51/53 — all taken from the panel's live HID report descriptor.
-- **WCH panels give full multitouch on macOS once unlocked.** The controller boots in
-  single-touch mouse emulation; TouchNext writes the Input Mode feature (report 0x21,
-  payload `[2, 0]` without the report ID in the buffer, before input reports are registered —
-  the ordering and buffer shape are the whole trick, per Touch-Up issue #40) at every panel
-  attach, and the digitizer interface streams up to ten fingers with every gesture. The panel's
-  mouse-emulation reports are kept as a fallback for the moment after a replug (and are dropped
-  once digitizer frames flow), so the screen never goes dead in between.
+- **That panel is single-touch on a Mac.** Its firmware withholds the digitizer stream from macOS:
+  it decides at USB enumeration, from how the host reads string descriptors, and [TinyUSB issue
+  4346](https://github.com/hathach/tinyusb/issues/4346) shows that on the same controller. TouchNext
+  writes the Input Mode feature (report 0x21) at every panel attach; the controller acknowledges
+  it and ignores it. Measured over raw USB on 2026-11-24 with a finger on the glass: the firmware
+  stores no mode (the feature reads back the request packet), and neither Linux-style string reads
+  nor a reconfigure without drivers made the digitizer interface report. TouchNext therefore reads
+  the panel's mouse reports, and ignores a mouse report for a second after any digitizer frame so
+  that a finger is never delivered twice. See the hardware note in the README.
+- **Single-touch stream quality**, from recordings of that panel:
+  - a lift report's coordinates are never used: the panel sends about one lift report in fourteen
+    with (0, 0), which put taps on the Apple menu;
+  - a coordinate jump beyond what a finger can travel in the time is discarded, as libinput does
+    for touchpads;
+  - a press that disappears mid-drag and returns within 1.2 s, near where it would have travelled,
+    continues the drag.
 - **Panel discovery is by HID class now**, not USB IDs: any USB touch-screen digitizer is matched
   (Apple's own devices excluded), and what was seized is logged with its product name and USB IDs.
 - **The touch display falls back to the single external display** when its EDID vendor/model match
@@ -22,7 +31,13 @@
 - The ILITEK path (ARZOPA, USB `0x222A:0x0001`) keeps working: same parser, plus the slot count
   now derives from the report length for shorter ILITEK-family panels. The ILITEK single-touch
   recovery feature reads only apply to ILITEK controllers.
-- Unit tests for the WCH report format.
+- **Permissions are asked for.** TouchNext requests Input Monitoring with the system prompt whenever
+  it is missing, as it already did for Accessibility, and restarts itself once both are granted. A
+  failed seize names the permission it needs.
+- **The build stops instead of signing ad-hoc** when its signing identity is not in the keychain.
+  An ad-hoc build installed over a signed one takes the privacy grants away from it.
+- Unit tests for both WCH report formats, and two recorded panel sessions replayed through the
+  parser, the tracker and the recognizer.
 
 ## 1.1.0 (2026-10-11)
 

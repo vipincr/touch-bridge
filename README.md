@@ -170,11 +170,11 @@ TouchNext therefore reads the single-touch mouse reports, and replugging changes
    cd touch-bridge
    ```
 
-2. **Create a signing certificate (recommended, one time).** macOS ties the Accessibility permission to the app's signature. An ad-hoc signed build loses the permission every time you rebuild; a stable self-signed certificate keeps it.
+2. **Create a signing certificate (recommended, one time).** macOS ties the Accessibility and Input Monitoring permissions to the app's signature. An ad-hoc signed build loses them every time you rebuild; a stable self-signed certificate keeps them.
    1. Open Keychain Access and choose Keychain Access → Certificate Assistant → Create a Certificate….
    2. Enter the name `TouchNext Dev`, choose Identity Type "Self-Signed Root" and Certificate Type "Code Signing", and create it.
 
-   To use a certificate with another name, set `TOUCHNEXT_SIGN_IDENTITY` when building. Without any certificate, the build falls back to ad-hoc signing and prints a warning.
+   To use another certificate, set `TOUCHNEXT_SIGN_IDENTITY` to its keychain name when building. If the name is not in the keychain the build stops and lists the identities; it never falls back to ad-hoc signing.
 
 3. **Build and install.**
    ```bash
@@ -187,8 +187,8 @@ TouchNext therefore reads the single-touch mouse reports, and replugging changes
    - starts it.
 
 4. **Grant permissions.**
-   1. Open System Settings → Privacy & Security → Accessibility and switch on TouchNext. If macOS also asks for Input Monitoring, allow that too.
-   2. Restart TouchNext, because macOS applies new permissions only to a freshly started app: choose ✋ → Quit TouchNext, then open `~/Applications/TouchNext.app` again.
+   1. TouchNext asks for both permissions when it starts. Allow Accessibility and Input Monitoring in System Settings → Privacy & Security. A panel that reports through a mouse interface, the JN-MD-IPST105FP among them, needs Input Monitoring.
+   2. TouchNext restarts itself once both are granted. To do it by hand: choose ✋ → Quit TouchNext, then open `~/Applications/TouchNext.app` again.
 
 5. **Touch the screen.** The ✋ menu shows whether the panel and the touch display were found.
 
@@ -334,6 +334,8 @@ Add `-g` after `open` to keep a diagnostic run in the background.
 **Touches move the cursor, or land on the wrong screen.** TouchNext isn't running or isn't enabled, so macOS is handling the panel itself.
 
 **The panel is found but apps don't react.** Accessibility permission is missing, or was granted to a differently signed build. Switch it off and on again in System Settings → Privacy & Security → Accessibility, then restart TouchNext.
+
+**`seize failed: kIOReturnNotPermitted` on the panel's mouse interface.** Input Monitoring is off for TouchNext, which is what an ad-hoc signed build installed over a signed one leaves behind. Switch it on again in System Settings → Privacy & Security → Input Monitoring. If the entry will not switch on, run `tccutil reset ListenEvent com.gramini.touchnext`, start TouchNext and allow its prompt.
 
 **Only one finger works.** On the WCH `0x27C0:0x0859` panel that is as far as a Mac can go: see the hardware note. Replugging does not change it.
 

@@ -21,8 +21,12 @@ if security find-identity -p codesigning | grep -qF "\"$IDENTITY\""; then
     codesign --force --sign "$IDENTITY" "$APP"
     echo "Signed with \"$IDENTITY\"."
 else
-    codesign --force --sign - "$APP"
-    echo "WARNING: signing identity \"$IDENTITY\" not found; signed ad-hoc. Privacy grants will reset on every build."
+    # An ad-hoc build looks like a different app to the privacy system: installed over a signed copy,
+    # it takes the Accessibility and Input Monitoring grants away from it.
+    echo "error: signing identity \"$IDENTITY\" is not in the keychain, so nothing was signed." >&2
+    echo "Set TOUCHNEXT_SIGN_IDENTITY to one of the identities below and run this again:" >&2
+    security find-identity -v -p codesigning | sed -E 's/^ *[0-9]+\) [0-9A-F]+ //' >&2
+    exit 1
 fi
 
 codesign --verify --verbose=1 "$APP"
