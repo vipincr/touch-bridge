@@ -321,6 +321,7 @@ Diagnostic modes run on a debug build (`./scripts/bundle.sh --debug` leaves it i
 | `--direct-selftest` | Posts test events to the Event Sink only (`--swipe` adds the page-swipe variants) |
 | `--ax-probe --map` | Read-only map of the window-drag areas on screen |
 | `--ax-probe --menubar` | Read-only report: displays, menu bars and clocks, active menu-bar display, current Spaces, the Dock |
+| `--ax-probe --menu` | Lists the installed copy's menu as Accessibility reports it, status lines and check marks included. Each `--press "Title"` (or `--press "Submenu/Item"`) then presses one item, without moving the cursor, and lists the menu again. |
 | `--restart-selftest` † | Starts, stops and restarts the panel input |
 | `--dockswipe-selftest` | Posts Mission Control dock swipes and closes them again. **Visible on screen.** |
 | `--system-ui-selftest` | Opens and closes Notification Center and Launchpad (`--nc`, `--launchpad`, `--move-dock`, `--spaces`) and logs where each appeared. **Visible on screen.** |

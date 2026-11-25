@@ -34,6 +34,9 @@
 - **`--replay <recording>`** (debug build) runs a probe recording through the pipeline in dry run,
   at the speed it was recorded and with the saved menu settings, and prints every line the
   pipeline reports to the terminal. It posts nothing and does not take the panel.
+- **`--ax-probe --menu`** (debug build) lists the installed copy's menu as Accessibility reports
+  it, status lines and check marks included. Each `--press "Title"` presses one item without
+  moving the cursor and lists the menu again, so the app's menu can be driven from a script.
 - **The press journal keeps its file open.** A press overwrites the file and a release empties it;
   before, each click created the file and each release removed it. Same measurement: 5 µs a click
   instead of 47 µs, and the worst click at 33 µs instead of 2 ms, on the path that leads to the

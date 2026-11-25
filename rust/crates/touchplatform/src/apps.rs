@@ -11,6 +11,16 @@ pub fn with_bundle_id(bundle_id: &str) -> Option<Retained<NSRunningApplication>>
 }
 
 /// The app that runs as `pid`, while it still runs.
+/// Every running app with this bundle identifier except this process: for a diagnostic, the
+/// installed copy.
+#[cfg(feature = "debug")]
+pub fn others_with_bundle_id(bundle_id: &str) -> Vec<Retained<NSRunningApplication>> {
+    NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(bundle_id))
+        .into_iter()
+        .filter(|app| app.processIdentifier() != std::process::id() as i32)
+        .collect()
+}
+
 pub fn with_pid(pid: i32) -> Option<Retained<NSRunningApplication>> {
     NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
 }

@@ -22,7 +22,8 @@ pub struct AXProbe;
 
 impl AXProbe {
     /// Runs the variant the command line asks for: the menu-bar probe (`--menubar`), the drag-area
-    /// map (`--map`), one window's role chain column (`--owner NAME`), or the default grid.
+    /// map (`--map`), the installed copy's menu (`--menu`), one window's role chain column
+    /// (`--owner NAME`), or the default grid.
     pub fn run(mtm: MainThreadMarker, log: &mut dyn FnMut(&str)) {
         let args: Vec<String> = std::env::args().collect();
         if args.iter().any(|arg| arg == "--menubar") {
@@ -31,6 +32,18 @@ impl AXProbe {
         }
         if args.iter().any(|arg| arg == "--map") {
             map(log);
+            return;
+        }
+        if args.iter().any(|arg| arg == "--menu") {
+            // Each `--press "Title"` (or `--press "Submenu/Item"`) names one item to press, in turn,
+            // after the listing.
+            let presses: Vec<String> = args
+                .iter()
+                .enumerate()
+                .filter(|(_, argument)| argument.as_str() == "--press")
+                .filter_map(|(index, _)| args.get(index + 1).cloned())
+                .collect();
+            MenuBarProbe::drive(&presses, log);
             return;
         }
         if let Some(index) = args.iter().position(|arg| arg == "--owner")

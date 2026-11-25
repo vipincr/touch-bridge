@@ -1,29 +1,78 @@
-//! Read-only diagnostic (`--ax-probe --menubar`): what decides the display that Notification Center,
-//! Launchpad and Space switching use. Logs each display's menu bar, the clock as Accessibility
-//! reports it on every display, the active menu-bar display and current Space per display, and the
-//! Dock's windows. Sends no events.
+//! Diagnostics on menu bars (`--ax-probe --menubar`, `--ax-probe --menu`).
+//!
+//! `--menubar` is read-only: what decides the display that Notification Center, Launchpad and Space
+//! switching use. It logs each display's menu bar, the clock as Accessibility reports it on every
+//! display, the active menu-bar display and current Space per display, and the Dock's windows.
+//!
+//! `--menu` lists the installed copy's own menu as Accessibility reports it, status lines included.
+//! With a `--press "Title"` for each it presses those items in turn, through Accessibility (the
+//! cursor stays where it is), and lists the menu again after each: the app's menu, driven without
+//! a hand on it.
 
 use objc2::MainThreadMarker;
 use objc2_app_kit::NSScreen;
-use objc2_core_foundation::{CGPoint, CGRect};
+use objc2_core_foundation::{CFRetained, CGPoint, CGRect};
 use objc2_core_graphics::{
     CGDisplayBounds, CGDisplayIsMain, CGDisplayModelNumber, CGDisplayVendorNumber,
 };
+use objc2_application_services::AXUIElement;
 use objc2_core_graphics::CGEvent;
 use touchcore::mapper::ScreenPoint;
 use touchcore::menubar::MenuBarGeometry;
 use touchcore::policy::WindowHitTester;
 
-use crate::accessibility::{self, EXTRAS_MENU_BAR, IDENTIFIER, ROLE, SUBROLE};
+use crate::accessibility::{self, ENABLED, EXTRAS_MENU_BAR, IDENTIFIER, MARK, ROLE, SUBROLE, TITLE};
 use crate::apps;
 use crate::swift_text::{swift_f64, swift_point, swift_rect};
 use crate::system_displays::SystemDisplays;
 use crate::window::WindowLocator;
 
-/// Runs the menu-bar probe.
+/// Runs the menu-bar probes.
 pub struct MenuBarProbe;
 
+/// This app's bundle identifier: how the installed copy is told from everything else.
+const BUNDLE_ID: &str = "com.gramini.touchnext";
+
+/// One item of a menu as Accessibility reports it: how it is named here (`Touch Mode/Drawing…` for
+/// an item of a submenu), whether it is chosen, and whether it can be.
+struct MenuItem {
+    path: String,
+    chosen: bool,
+    enabled: bool,
+    element: CFRetained<AXUIElement>,
+}
+
 impl MenuBarProbe {
+    /// Lists the installed copy's menu, presses each item named in `presses` in turn, and lists
+    /// the menu again after each press.
+    pub fn drive(presses: &[String], log: &mut dyn FnMut(&str)) {
+        let copies = apps::others_with_bundle_id(BUNDLE_ID);
+        let Some(app) = copies.first() else {
+            log("no other TouchNext is running");
+            return;
+        };
+        let pid = app.processIdentifier();
+        log(&format!(
+            "TouchNext pid {pid}: {}",
+            app.bundleURL().and_then(|url| url.path()).map(|path| path.to_string()).unwrap_or_else(|| "?".to_owned())
+        ));
+        let element = accessibility::application(pid, 2.0);
+        let listing = || list(&element);
+        dump(&listing(), log);
+        for press in presses {
+            let Some(item) = listing().into_iter().find(|item| item.path == *press) else {
+                log(&format!("press {press}: no such item"));
+                continue;
+            };
+            // The press is answered on the app's main thread; its effects follow a moment later.
+            let accepted = accessibility::press(&item.element);
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+            log(&format!("pressed {press}: {}", if accepted { "accepted" } else { "refused" }));
+            dump(&listing(), log);
+        }
+        log("done");
+    }
+
     /// Samples every display, the menu-bar clocks, the Space state and the Dock's windows, and
     /// logs what decides where each system surface opens.
     pub fn run(mtm: MainThreadMarker, log: &mut dyn FnMut(&str)) {
@@ -195,4 +244,41 @@ fn swift_screen_point(point: ScreenPoint) -> String {
         swift_f64(point.x),
         swift_f64(point.y),
     )
+}
+
+/// The items of the status item's menu, each submenu's items after their parent.
+fn list(app: &AXUIElement) -> Vec<MenuItem> {
+    let describe = |element: CFRetained<AXUIElement>, path: String| MenuItem {
+        chosen: accessibility::string(&element, MARK).is_some_and(|mark| !mark.is_empty()),
+        enabled: accessibility::flag(&element, ENABLED).unwrap_or(true),
+        element,
+        path,
+    };
+    let Some(bar) = accessibility::element(app, EXTRAS_MENU_BAR) else { return Vec::new() };
+    let Some(status_item) = accessibility::children(&bar).into_iter().next() else { return Vec::new() };
+    let Some(menu) = accessibility::children(&status_item).into_iter().next() else { return Vec::new() };
+    let mut items = Vec::new();
+    for item in accessibility::children(&menu) {
+        let Some(title) = accessibility::string(&item, TITLE).filter(|title| !title.is_empty()) else { continue };
+        let submenu = accessibility::children(&item).into_iter().find(|child| role(child) == "AXMenu");
+        items.push(describe(item, title.clone()));
+        if let Some(submenu) = submenu {
+            for entry in accessibility::children(&submenu) {
+                if let Some(name) = accessibility::string(&entry, TITLE).filter(|name| !name.is_empty()) {
+                    items.push(describe(entry, format!("{title}/{name}")));
+                }
+            }
+        }
+    }
+    items
+}
+
+/// Logs every item: a check mark on a chosen one, and "disabled" on a status line.
+fn dump(items: &[MenuItem], log: &mut dyn FnMut(&str)) {
+    for item in items {
+        let mark = if item.chosen { "✓ " } else { "  " };
+        let submenu = if item.path.contains('/') { "    " } else { "" };
+        let state = if item.enabled { "" } else { "  (disabled)" };
+        log(&format!("  {submenu}{mark}{}{state}", item.path));
+    }
 }

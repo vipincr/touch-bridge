@@ -10,7 +10,7 @@
 use std::ptr::NonNull;
 
 use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
-use objc2_core_foundation::{CFArray, CFRetained, CFString, CFType, CGPoint, CGSize, CGRect, Type};
+use objc2_core_foundation::{CFArray, CFBoolean, CFRetained, CFString, CFType, CGPoint, CGSize, CGRect, Type};
 
 /// The element's role, as "AXWindow" or "AXButton".
 pub const ROLE: &str = "AXRole";
@@ -26,6 +26,12 @@ pub const POSITION: &str = "AXPosition";
 pub const SIZE: &str = "AXSize";
 /// The element's identifier, where the app sets one (the clock's is "com.apple.menuextra.clock").
 pub const IDENTIFIER: &str = "AXIdentifier";
+/// The element's title: a menu item's text, or the status line it shows.
+pub const TITLE: &str = "AXTitle";
+/// The character that marks a chosen menu item (a check mark); absent otherwise.
+pub const MARK: &str = "AXMenuItemMarkChar";
+/// Whether the user can choose the element.
+pub const ENABLED: &str = "AXEnabled";
 /// The menu bar extras of an app that is not frontmost (the clock on every display).
 pub const EXTRAS_MENU_BAR: &str = "AXExtrasMenuBar";
 /// The action of clicking the element.
@@ -70,6 +76,11 @@ pub fn string(element: &AXUIElement, name: &str) -> Option<String> {
     let value = attribute(element, name)?;
     let text: &CFString = value.downcast_ref()?;
     Some(text.to_string())
+}
+
+/// A boolean attribute.
+pub fn flag(element: &AXUIElement, name: &str) -> Option<bool> {
+    attribute(element, name)?.downcast_ref::<CFBoolean>().map(|flag| flag.as_bool())
 }
 
 /// An attribute whose value is itself an element.
