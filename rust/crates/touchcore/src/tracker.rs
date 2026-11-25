@@ -144,7 +144,7 @@ impl ContactTracker {
             // the cross-id search run, so both are modelled here.
             let mut same_id_adopted = false;
             if let Some(&(press, lifted_at_ns)) = self.pending.get(&contact.id) {
-                let gap_ns = at_ns - lifted_at_ns;
+                let gap_ns = at_ns.saturating_sub(lifted_at_ns);
                 if gap_ns <= self.debounce_ns
                     && self.distance_mm(contact, &press) <= self.adoption_radius_mm(&press, gap_ns)
                 {
@@ -261,7 +261,7 @@ impl ContactTracker {
             if id == contact.id {
                 continue;
             }
-            let gap_ns = at_ns - lifted_at_ns;
+            let gap_ns = at_ns.saturating_sub(lifted_at_ns);
             if gap_ns > self.debounce_ns {
                 continue;
             }
@@ -286,7 +286,7 @@ impl ContactTracker {
         let due: SmallVec<[u8; 16]> = self
             .pending
             .iter()
-            .filter(|(_, (_, lifted_at_ns))| at_ns - lifted_at_ns >= self.debounce_ns)
+            .filter(|(_, (_, lifted_at_ns))| at_ns.saturating_sub(*lifted_at_ns) >= self.debounce_ns)
             .map(|(id, _)| *id)
             .collect();
         for id in due {
@@ -304,7 +304,7 @@ impl ContactTracker {
 
     fn advanced(&self, press: Press, contact: &Contact, at_ns: u64) -> Press {
         let mut next = press;
-        let dt = (at_ns - press.last_at_ns) as f64 / 1_000_000_000.0;
+        let dt = at_ns.saturating_sub(press.last_at_ns) as f64 / 1_000_000_000.0;
         if dt >= 0.001 {
             let v = self.distance_mm(contact, &press) / dt;
             next.speed = if press.speed == 0.0 { v } else { press.speed * 0.7 + v * 0.3 };
@@ -469,6 +469,22 @@ mod tests {
         assert!(tracker.update(&frame(&[]), 50 * MS).is_empty());
         assert_eq!(
             tracker.update(&frame(&[]), 80 * MS).as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3 }]);
+        assert_eq!(tracker.active_count(), 0);
+    }
+
+    // Frame times come from the panel's reports and the expiry from the pipeline's own clock.
+    // Where the two cross, a held lift is not overdue before its window has passed.
+    #[test]
+    fn a_clock_behind_the_frame_time_does_not_flush_a_held_lift() {
+        let mut tracker = ContactTracker::default();
+        let _ = tracker.update(&frame(&[(1, true, 0.2, 0.3)]), 100 * MS);
+        assert!(tracker.update(&frame(&[(1, false, 0.0, 0.0)]), 110 * MS).is_empty());
+        assert!(tracker.expire(109 * MS).is_empty());
+        assert!(tracker.expire(169 * MS).is_empty());
+        assert_eq!(
+            tracker.expire(170 * MS).as_slice(),
+            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3 }]
+        );
         assert_eq!(tracker.active_count(), 0);
     }
 
