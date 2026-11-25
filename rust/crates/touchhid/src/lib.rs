@@ -1,28 +1,48 @@
 //! Touch-panel HID access.
 //!
-//! One backend per host, selected at compile time. The backend seizes the
-//! panel's HID interfaces (so the host's own cursor emulation stops), performs
-//! the panel's mode unlock where one is needed, and delivers raw input reports
-//! to a channel. Everything above this crate is portable.
+//! One backend per host, selected at compile time. The backend finds the panel, seizes its HID
+//! interfaces (so the host's own cursor emulation stops), performs the panel's mode unlock where one
+//! is needed, and delivers raw reports and status lines to the sink its consumer hands it. Everything
+//! above this crate is portable.
 
-/// One raw input report (report ID at index 0) and its length.
-#[derive(Debug, Clone, Copy)]
+/// The clock the driver runs on: nanoseconds, monotonic, the same clock IOKit stamps reports with.
+pub mod clock;
+
+/// One input report. `timestamp_ns` is the time IOKit stamped it with, in nanoseconds of
+/// [`clock`] (the mach timebase applied to the mach absolute time of the callback). `bytes` is the
+/// report including the report ID at index 0.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RawReport {
-    pub bytes: [u8; 128],
-    pub len: usize,
+    pub timestamp_ns: u64,
+    pub bytes: Vec<u8>,
 }
+
+/// One event from the panel source. `Status` carries the exact texts the app's log and its readers
+/// depend on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PanelEvent {
+    Report(RawReport),
+    Status(String),
+}
+
+/// Where the source delivers its events.
+///
+/// It is called on the source's own dispatch queue, so it must only push the event onward (into a
+/// channel, a file) and never call back into the source: a consumer blocked in one of the source's
+/// synchronous calls would wait for the queue for ever.
+pub type PanelSink = Box<dyn Fn(PanelEvent) + Send>;
 
 #[cfg(target_os = "macos")]
 pub mod macos;
 
 #[cfg(target_os = "macos")]
-pub use macos::Driver;
+pub use macos::HidTouchSource;
 
-/// Placeholder until the hidraw (Linux) and WinHID (Windows) backends land;
-/// both platforms' stacks handle HID multitouch natively, so their backends
-/// exist for the TUIO/driver use cases, not for basic touch.
+/// Placeholder until the hidraw (Linux) and WinHID (Windows) backends land; both platforms' stacks
+/// handle HID multitouch natively, so their backends exist for the TUIO/driver use cases, not for
+/// basic touch.
 #[cfg(not(target_os = "macos"))]
 pub mod stub;
 
 #[cfg(not(target_os = "macos"))]
-pub use stub::Driver;
+pub use stub::HidTouchSource;

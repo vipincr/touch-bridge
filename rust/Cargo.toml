@@ -1,12 +1,38 @@
 [workspace]
 resolver = "2"
-members = ["crates/touchcore", "crates/touchhid", "crates/touchnext"]
+members = ["crates/touchcore", "crates/touchhid", "crates/touchplatform", "crates/touchnext"]
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "MIT"
+rust-version = "1.88"
+
+[workspace.dependencies]
+touchcore = { path = "crates/touchcore" }
+touchhid = { path = "crates/touchhid" }
+touchplatform = { path = "crates/touchplatform" }
+
+# Apple frameworks and Core Foundation/Core Graphics, through the generated objc2 bindings rather
+# than hand-written extern blocks. The default feature set of each framework crate is complete.
+objc2 = "0.6"
+block2 = "0.6"
+dispatch2 = "0.3"
+objc2-foundation = "0.3"
+objc2-core-foundation = "0.3"
+objc2-core-graphics = "0.3"
+objc2-app-kit = "0.3"
+objc2-application-services = "0.3"
+objc2-io-kit = "0.3"
+mach2 = "0.7"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+smallvec = "1"
+libc = "0.2"
 
 [profile.release]
 lto = true
 strip = true
+codegen-units = 1
+panic = "abort"

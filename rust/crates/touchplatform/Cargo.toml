@@ -1,0 +1,25 @@
+[package]
+name = "touchplatform"
+description = "macOS input and output around the gesture core: displays, windows, and the events the driver posts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+touchcore.workspace = true
+touchhid.workspace = true
+smallvec.workspace = true
+libc.workspace = true
+
+objc2.workspace = true
+block2.workspace = true
+objc2-foundation.workspace = true
+objc2-core-foundation.workspace = true
+objc2-core-graphics.workspace = true
+objc2-app-kit.workspace = true
+objc2-application-services.workspace = true
+objc2-io-kit.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true

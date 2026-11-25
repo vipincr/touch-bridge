@@ -1,10 +1,27 @@
 [package]
 name = "touchnext"
-description = "Touch-panel driver daemon: seizes the panel, unlocks digitizer mode, and forwards every finger as TUIO (or probes the raw stream)"
+description = "The TouchNext driver: a menu-bar app that turns a USB touch panel into trackpad-style input on macOS"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "TouchNext"
+path = "src/main.rs"
 
 [dependencies]
-touchcore = { path = "../touchcore" }
-touchhid = { path = "../touchhid" }
+touchcore.workspace = true
+touchhid.workspace = true
+touchplatform.workspace = true
+libc.workspace = true
+
+objc2.workspace = true
+block2.workspace = true
+dispatch2.workspace = true
+objc2-foundation.workspace = true
+objc2-core-foundation.workspace = true
+objc2-core-graphics.workspace = true
+objc2-app-kit.workspace = true
+objc2-application-services.workspace = true
+objc2-io-kit.workspace = true

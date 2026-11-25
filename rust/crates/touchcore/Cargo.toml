@@ -4,3 +4,6 @@ description = "Portable touch-panel core: HID report decoders (WCH, ILITEK), con
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
+[dependencies]
+smallvec.workspace = true

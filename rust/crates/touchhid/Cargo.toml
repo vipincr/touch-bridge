@@ -1,6 +1,15 @@
 [package]
 name = "touchhid"
-description = "Touch-panel HID access: seizes the panel's interfaces, unlocks digitizer mode, delivers raw reports"
+description = "Touch-panel HID access: finds the panel, opens its interfaces, asks for multitouch mode, delivers raw reports"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+block2.workspace = true
+dispatch2.workspace = true
+objc2-core-foundation.workspace = true
+objc2-io-kit.workspace = true
+libc.workspace = true
+mach2.workspace = true
