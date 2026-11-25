@@ -211,7 +211,7 @@ impl InputPipeline {
             hooks: Arc::clone(&hooks),
             apps: AppDirectory::new(),
             mapper: Mutex::new(None),
-            window_drag_memo: Mutex::new(None),
+            window_drag_memo: Mutex::new(Vec::new()),
             own_pid: std::process::id() as i32,
         });
         let callback_sender = Box::new(tx.clone());
@@ -391,8 +391,9 @@ struct Shared {
     apps: AppDirectory,
     /// The touch display's mapper, set by `refresh_display`; `None` while the display is unknown.
     mapper: Mutex<Option<CoordinateMapper>>,
-    /// The window-drag answer for the gesture being classified, so Accessibility is asked once.
-    window_drag_memo: Mutex<Option<(CGPoint, bool)>>,
+    /// The window-drag answers of the gesture being classified, so Accessibility is asked once
+    /// per point: for where the finger landed, and for a window drag also where it is pressed.
+    window_drag_memo: Mutex<Vec<(CGPoint, bool)>>,
     /// This process's pid, whose own windows are never touch targets.
     own_pid: i32,
 }
@@ -406,13 +407,27 @@ impl Shared {
         *self.mapper.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = mapper;
     }
 
-    fn window_drag_memo(&self) -> Option<(CGPoint, bool)> {
-        *self.window_drag_memo.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    fn window_drag_answer(&self, point: CGPoint) -> Option<bool> {
+        self.window_drag_memo
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .find(|(asked, _)| same_point(*asked, point))
+            .map(|(_, result)| *result)
     }
 
-    fn set_window_drag_memo(&self, memo: Option<(CGPoint, bool)>) {
-        *self.window_drag_memo.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = memo;
+    fn remember_window_drag(&self, point: CGPoint, result: bool) {
+        self.window_drag_memo.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((point, result));
     }
+
+    fn forget_window_drag_answers(&self) {
+        self.window_drag_memo.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clear();
+    }
+}
+
+/// Whether two screen points are the same one to the window server (half a point apart at most).
+fn same_point(a: CGPoint, b: CGPoint) -> bool {
+    (a.x - b.x).abs() < 0.5 && (a.y - b.y).abs() < 0.5
 }
 
 /// Sends one line to the status hook, when there is one. Runs on the pipeline's thread.
@@ -424,13 +439,12 @@ fn emit_status(hooks: &Arc<Mutex<PipelineHooks>>, message: &str) {
 }
 
 /// Whether a pan or drag starting at `point` moves the window (toolbar, title bar, title text).
-/// Answers from the memo when the point matches, else asks the window list and Accessibility once
+/// Answers from what this gesture asked already, else asks the window list and Accessibility once
 /// and remembers the answer.
 fn starts_window_drag(shared: &Shared, point: CGPoint, windows: &[WindowInfo]) -> bool {
-    if let Some((memo_point, result)) = shared.window_drag_memo()
-        && (memo_point.x - point.x).abs() < 0.5 && (memo_point.y - point.y).abs() < 0.5 {
-            return result;
-        }
+    if let Some(result) = shared.window_drag_answer(point) {
+        return result;
+    }
     let Some(window) = WindowHitTester::top_window(screen_point(point), windows, shared.own_pid)
     else {
         return false;
@@ -442,7 +456,7 @@ fn starts_window_drag(shared: &Shared, point: CGPoint, windows: &[WindowInfo]) -
     // them down); they get the original 28 pt rule instead.
     let use_accessibility = !shared.apps.is_chromium(window.pid);
     let result = WindowDragArea::is_drag_area(point, window, use_accessibility);
-    shared.set_window_drag_memo(Some((point, result)));
+    shared.remember_window_drag(point, result);
     if result {
         emit_status(
             &shared.hooks,
@@ -1517,8 +1531,8 @@ impl Pipeline {
         let kind = gesture_kind_name(kind);
         let mode = mode.as_str();
         self.status(&format!("{kind} → {mode} on {owner}"));
-        // The memo served this decision only (the Swift `defer`).
-        self.shared.set_window_drag_memo(None);
+        // The answers served this gesture's classification only (the Swift `defer`).
+        self.shared.forget_window_drag_answers();
     }
 
     // MARK: geometry
@@ -1645,7 +1659,7 @@ impl Pipeline {
         self.recognizer = fresh;
         self.contacts.clear();
         self.cadence_deadline = None;
-        self.shared.set_window_drag_memo(None);
+        self.shared.forget_window_drag_answers();
         self.close_dock_swipe(now_ns);
         self.dock_push = None;
         self.stop_dock_return();
