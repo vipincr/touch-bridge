@@ -5,8 +5,27 @@
 - **TouchNext is written in Rust now.** `rust/` holds the whole driver in four crates: `touchcore`
   (the gesture logic, with no system framework in it), `touchhid` (the panel over IOKit HID),
   `touchplatform` (macOS I/O: displays, windows, event synthesis, Direct and Warp delivery, system
-  gestures, the pipeline) and `touchnext` (the menu-bar app and its diagnostics). The gestures,
-  thresholds, menu, log lines and command lines are those of 1.2.0.
+  gestures, the pipeline) and `touchnext` (the menu-bar app and its diagnostics). The menu, log
+  lines and command lines are those of 1.2.0, and so are the gestures and thresholds but for the
+  drags below.
+- **Slow drags are recognised.** The radius in which a finger counts as stationary grew at 25 mm/s
+  for as long as the finger was down, so a drag at or below that speed never became one: nothing
+  moved, and the lift after half a second was a right-click. The radius still grows to 16.75 mm by
+  the long-press time, which keeps a finger held to right-click room to settle, and stops there.
+  On a window's drag area (toolbar, title bar, title text) the 8 mm tap slop is the whole test,
+  however long the finger has been down.
+- **A window drag is pressed where the finger is.** A drag is recognised only after some travel,
+  and the window was pressed where the finger had landed and then moved to where it was: it jumped
+  the dead travel. The press is now made where the finger is when the drag is recognised, as long
+  as that is still a drag area.
+- **A debug build keeps the raw panel reports.** Each run writes every report it is given to
+  `~/Library/Logs/TouchNext/reports-<date>-<time>.log`, in the probe's format, and the log names
+  the file. `--replay` runs it again, and `--replay … --frames` prints every position the
+  recognizer was given. The log also says where each finger began and ended, and names each press
+  and drag the app posted.
+- The tracker no longer subtracts a frame time from an earlier one. Where the pipeline's clock and
+  the panel's stamps crossed, a checked build panicked and a release build read the held lift as
+  overdue.
 - **Build with `cargo`.** `scripts/bundle.sh` runs `cargo build --release` and signs the result as
   before. A Rust toolchain (1.88 or later) replaces the Swift one, and `cargo test` replaces
   `swift test`.

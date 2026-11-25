@@ -73,6 +73,8 @@ Commercial drivers exist. TouchNext is a free, user-space alternative. Its goal 
 | Thumb and three or four fingers pinching in / spreading out | Launchpad / Show Desktop |
 | Six or more fingers | Ignored (palm rejection) |
 
+**When a drag counts as one.** A finger travels 8 mm from where it landed before a swipe scrolls or a drag drags, so that a tap can wobble. On a toolbar, title bar or title text that is the whole test, and the window is pressed where the finger is by then, as long as that is still a drag area: it starts moving without a jump. Anywhere else a finger held to right-click has room to settle. The allowance grows to 16.75 mm by 0.5 s and stops there, so a slow swipe or drag starts once it has travelled that far.
+
 **Where the system gestures appear.** Space switching, Notification Center and Launchpad open on the touch display, not on whichever screen has the cursor or the focused window:
 - **Spaces and Notification Center** appear on the display with the cursor. While they open, TouchNext briefly parks the hidden cursor on the touch display.
 - **Launchpad** opens on the display that has the Dock. A pinch-in on the touch display first brings the Dock there, then (by default) sends it back after Launchpad closes.
@@ -307,7 +309,8 @@ Making all of this automatic would be the natural next step: parsing any standar
 Only a debug build keeps a log and has the diagnostics: one made with `./scripts/bundle.sh --debug`, which turns on the Cargo feature `debug`. The build `./scripts/install.sh` installs is the prod build. It opens no log file and has no diagnostics; given one of their arguments, it says so and exits. The menu's status lines are there in both builds. To read what the installed copy does, install a debug build for the while: `./scripts/install.sh --debug`.
 
 A debug build's logs are in `~/Library/Logs/TouchNext/`:
-- `touchnext.log`: every gesture, and how and where it was delivered;
+- `touchnext.log`: every gesture, how and where it was delivered, where each finger began and ended, and every press and drag it posted;
+- `reports-<date>-<time>.log`: the raw panel reports of one run of the app, one line a report in the probe's format, so that `--replay` can run what the app was given. The ten newest runs are kept.
 - `eventsink.log`: what the Event Sink test window received;
 - other files from the diagnostic modes below.
 
@@ -334,7 +337,7 @@ Add `-g` after `open` to keep a diagnostic run in the background.
 build/TouchNext.app/Contents/MacOS/TouchNext --replay ~/Library/Logs/TouchNext/probe-x.jsonl
 ```
 
-It runs a probe recording through the pipeline in dry run, at the speed it was recorded and with the saved menu settings, and prints every line the pipeline reports: what it would have delivered, and where. It posts nothing and does not take the panel.
+It runs a recording (a probe's `probe-*.jsonl`, or a run's `reports-*.log`) through the pipeline in dry run, at the speed it was recorded and with the saved menu settings, and prints every line the pipeline reports: what it would have delivered, and where. Add `--frames` to print every position the recognizer was given as well, one line a frame. It posts nothing and does not take the panel.
 
 ## Troubleshooting
 
