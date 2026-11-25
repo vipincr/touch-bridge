@@ -161,6 +161,11 @@ pub struct PipelineHooks {
     pub contacts: Option<ContactsHook>,
     /// Called when the number of fingers changes: (now, most seen since start).
     pub touch_count: Option<TouchCountHook>,
+    /// Every raw panel report with its stamp, as it arrives and before anything is made of it.
+    /// Only a build with the `debug` feature has it: the app's log keeps them there, so a session
+    /// can be replayed from its own input.
+    #[cfg(feature = "debug")]
+    pub report: Option<ReportHook>,
 }
 
 /// A status line.
@@ -169,6 +174,9 @@ pub type StatusHook = Box<dyn FnMut(&str) + Send>;
 pub type ContactsHook = Box<dyn FnMut(&BTreeMap<u8, PanelPoint>) + Send>;
 /// How many fingers are down now, and the most there have been.
 pub type TouchCountHook = Box<dyn FnMut(usize, usize) + Send>;
+/// One raw panel report: its bytes, and the stamp the panel gave it (nanoseconds).
+#[cfg(feature = "debug")]
+pub type ReportHook = Box<dyn FnMut(&[u8], u64) + Send>;
 
 /// One item of work for the pipeline's thread, applied in order with the reports.
 enum Command {
@@ -752,6 +760,8 @@ impl Pipeline {
     /// One HID report: counted for the census, dropped while the panel's mouse emulation trails
     /// the digitizer, checked for the panel's mode, then filtered and turned into contact events.
     fn report(&mut self, bytes: &[u8], timestamp_ns: u64, now_ns: u64) {
+        #[cfg(feature = "debug")]
+        self.hooks_report(bytes, timestamp_ns);
         let Some(frame) = ReportParser::parse(bytes) else { return };
         let source = frame.source;
         let now = timestamp_ns;
@@ -789,6 +799,8 @@ impl Pipeline {
             self.touch_filter.filter(frame, now, self.settings.panel_width_mm, self.settings.panel_height_mm)
         {
             let events = self.tracker.update(&repaired, now);
+            #[cfg(feature = "debug")]
+            self.trace_contacts(&events, "with a report");
             self.process(events, now);
         }
     }
@@ -931,6 +943,8 @@ impl Pipeline {
         match due {
             Due::Cadence => {
                 let events = self.tracker.expire(now_ns);
+                #[cfg(feature = "debug")]
+                self.trace_contacts(&events, "on the timer");
                 self.process(events, now_ns);
                 // Pump the recognizer so a drag grace past its deadline commits without new
                 // events.
@@ -1680,6 +1694,30 @@ impl Pipeline {
         let mut hooks = self.hooks.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(hook) = &mut hooks.contacts {
             hook(&self.contacts);
+        }
+    }
+
+    /// Where each finger began or ended, as the tracker reports it, with whether the events came
+    /// with a report or from the cadence timer. Only a debug build's log has these lines.
+    #[cfg(feature = "debug")]
+    fn trace_contacts(&self, events: &[ContactEvent], from: &str) {
+        let Some(mapper) = self.shared.mapper() else { return };
+        for event in events {
+            let phase = match event.phase {
+                ContactPhase::Began => "began",
+                ContactPhase::Ended => "ended",
+                ContactPhase::Moved => continue,
+            };
+            let at = self.point(&mapper, PanelPoint::new(event.x, event.y));
+            self.status(&format!("contact {} {phase} at {},{} {from}", event.id, at.x as i64, at.y as i64));
+        }
+    }
+
+    #[cfg(feature = "debug")]
+    fn hooks_report(&self, bytes: &[u8], timestamp_ns: u64) {
+        let mut hooks = self.hooks.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(hook) = &mut hooks.report {
+            hook(bytes, timestamp_ns);
         }
     }
 

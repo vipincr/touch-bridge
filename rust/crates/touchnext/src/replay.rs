@@ -4,14 +4,18 @@
 //! Nothing is posted and the panel is not touched, so this runs next to the installed copy. It is
 //! how a gesture problem is measured from a recording before a rule is designed for it.
 
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
+use touchcore::gestures::PanelPoint;
 use touchhid::clock;
 use touchhid::{PanelEvent, RawReport};
-use touchplatform::pipeline::{locate_touch_display, InputPipeline, PipelineHooks, PipelineSettings};
+use touchplatform::pipeline::{
+    locate_touch_display, ContactsHook, InputPipeline, PipelineHooks, PipelineSettings,
+};
 use touchplatform::prefs_reader::TrackpadPreferencesReader;
 
 use crate::menu_bar::touch_count_title;
@@ -29,8 +33,9 @@ struct RecordedReport {
 /// is 1.2 s.
 const TAIL: Duration = Duration::from_millis(3_000);
 
-/// Replays the recording at `path` in dry run and prints what the pipeline does with it.
-pub fn run(path: &str) -> Result<(), String> {
+/// Replays the recording at `path` in dry run and prints what the pipeline does with it. With
+/// `frames`, every decoded frame is printed too, one line a finger: `frame <id> <x> <y>`.
+pub fn run(path: &str, frames: bool) -> Result<(), String> {
     let reports = read(Path::new(path))?;
     if reports.is_empty() {
         return Err(format!("{path}: no reports"));
@@ -42,11 +47,22 @@ pub fn run(path: &str) -> Result<(), String> {
         return Err("the touch display is not found, and the recording maps onto it".to_owned());
     }
 
+    // The pipeline's deadlines read this run's clock, so the recording's stamps move onto it. The
+    // base is read before anything else, so that no stamp is ahead of the clock when its report
+    // is fed.
+    let base_ns = clock::now_ns();
     let started = Instant::now();
     let pipeline = InputPipeline::new(PipelineHooks {
         status: Some(Box::new(move |line| emit(started, line))),
-        contacts: None,
+        contacts: frames.then(|| {
+            Box::new(move |fingers: &BTreeMap<u8, PanelPoint>| {
+                for (id, point) in fingers {
+                    emit(started, &format!("frame {id} {:.4} {:.4}", point.x, point.y));
+                }
+            }) as ContactsHook
+        }),
         touch_count: Some(Box::new(move |now, most| emit(started, &touch_count_title(now, most)))),
+        report: None,
     });
     // The saved menu settings, as the app applies them, in dry run: nothing is posted.
     let stored = StoredSettings::load();
@@ -59,9 +75,7 @@ pub fn run(path: &str) -> Result<(), String> {
         settings.dry_run = true;
     });
 
-    // The pipeline's deadlines read this run's clock, so the recording's stamps move onto it.
     let first_ns = reports[0].0;
-    let base_ns = clock::now_ns();
     for (t_ns, bytes) in reports {
         let due = started + Duration::from_nanos(t_ns - first_ns);
         let now = Instant::now();

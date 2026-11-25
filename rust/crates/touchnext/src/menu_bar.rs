@@ -27,6 +27,8 @@ use touchplatform::prefs_reader::TrackpadPreferencesReader;
 
 #[cfg(feature = "debug")]
 use objc2_foundation::{NSArray, NSURL};
+#[cfg(feature = "debug")]
+use touchplatform::pipeline::ReportHook;
 
 use crate::log::{log, FileLog};
 use crate::login_item;
@@ -736,7 +738,48 @@ fn hooks(log: Arc<FileLog>) -> PipelineHooks {
                 }
             });
         })),
+        #[cfg(feature = "debug")]
+        report: Some(trace_raw_reports(&log)),
     }
+}
+
+/// How many runs keep their raw reports. A run that crashes is restarted every few seconds, and
+/// the reports from before the first crash are the ones wanted.
+#[cfg(feature = "debug")]
+const KEPT_TRACES: usize = 10;
+
+/// Keeps this run's raw panel reports beside the log, one line a report in the probe's format, so
+/// that what the app was given can be replayed through it again (`--replay`). The file is named
+/// after the moment the run started, and the line this writes to the log names it and says what
+/// the machine's clock read then: the reports are stamped on that clock.
+#[cfg(feature = "debug")]
+fn trace_raw_reports(log: &FileLog) -> ReportHook {
+    let name = format!("reports-{}", crate::log::file_stamp());
+    let mut earlier: Vec<std::path::PathBuf> = std::fs::read_dir(crate::logs_directory())
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.starts_with("reports-") && name.ends_with(".log"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // Named by their start time, so the first names are the oldest runs.
+    earlier.sort();
+    for path in earlier.iter().take(earlier.len().saturating_sub(KEPT_TRACES - 1)) {
+        let _ = std::fs::remove_file(path);
+    }
+
+    let reports = Arc::new(FileLog::new(&name));
+    log!(log, "this run's raw reports go to {name}.log; the machine clock read {} ns", touchhid::clock::now_ns());
+    Box::new(move |bytes: &[u8], at_ns: u64| {
+        let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+        reports.write_line(&format!("{{\"t_ns\":{at_ns},\"hex\":\"{hex}\"}}\n"));
+    })
 }
 
 /// The menu line a status line belongs to, with the title it gets there. `None` for a line the

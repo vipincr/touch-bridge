@@ -123,10 +123,11 @@ fn diagnostic(flag: &str, arguments: &[String]) {
         }
         REPLAY => {
             let Some(recording) = value_after(REPLAY) else {
-                eprintln!("usage: TouchNext --replay <probe recording.jsonl>");
+                eprintln!("usage: TouchNext --replay <recording.jsonl> [--frames]");
                 std::process::exit(2);
             };
-            if let Err(error) = replay::run(recording) {
+            let frames = arguments.iter().any(|argument| argument == "--frames");
+            if let Err(error) = replay::run(recording, frames) {
                 eprintln!("TouchNext: {error}");
                 std::process::exit(1);
             }

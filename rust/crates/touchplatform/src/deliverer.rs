@@ -697,6 +697,25 @@ impl<E: DeliveryEffects> Deliverer<E> {
             ));
             return;
         }
+        // A debug build's log also names each press and drag it posts for real. Scrolls are left
+        // out: there are dozens a second.
+        #[cfg(feature = "debug")]
+        {
+            let kind = CGEvent::r#type(Some(&event));
+            let press = [
+                CGEventType::LeftMouseDown,
+                CGEventType::LeftMouseDragged,
+                CGEventType::LeftMouseUp,
+                CGEventType::RightMouseDown,
+                CGEventType::RightMouseUp,
+            ]
+            .contains(&kind);
+            if press {
+                let location = CGEvent::location(Some(&event));
+                let target = target_label(&self.target);
+                self.log_line(|| format!("posted {} at {},{} ({target})", kind.0, location.x as i64, location.y as i64));
+            }
+        }
         self.effects.post(&event, self.target);
     }
 

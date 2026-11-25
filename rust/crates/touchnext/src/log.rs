@@ -54,7 +54,11 @@ impl FileLog {
 
     /// Appends `message` with the local time in front.
     pub(crate) fn write(&self, message: &str) {
-        let line = format!("{} {message}\n", local_stamp());
+        self.write_line(&format!("{} {message}\n", local_stamp()));
+    }
+
+    /// Appends a line as it is: for records that carry their own time, like the raw panel reports.
+    pub(crate) fn write_line(&self, line: &str) {
         if let Ok(mut sink) = self.sink.lock() {
             let _ = sink.write_all(line.as_bytes());
         }
@@ -77,6 +81,25 @@ impl FileLog {
 /// The local time of day as `HH:MM:SS.mmm`, the format the log has always had.
 #[cfg(feature = "debug")]
 fn local_stamp() -> String {
+    let (parts, millis) = local_time();
+    format!("{:02}:{:02}:{:02}.{millis:03}", parts.tm_hour, parts.tm_min, parts.tm_sec)
+}
+
+/// The local date and time as `YYYYMMDD-HHMMSS`, for a file named after the moment it was made.
+#[cfg(feature = "debug")]
+pub(crate) fn file_stamp() -> String {
+    file_name_stamp(&local_time().0)
+}
+
+/// The same moment in calendar fields, written so that names made this way sort by age.
+#[cfg(feature = "debug")]
+fn file_name_stamp(parts: &libc::tm) -> String {
+    format!("{}{:02}{:02}-{:02}{:02}{:02}", parts.tm_year + 1900, parts.tm_mon + 1, parts.tm_mday, parts.tm_hour, parts.tm_min, parts.tm_sec)
+}
+
+/// The local time now, in calendar fields and the milliseconds past the second.
+#[cfg(feature = "debug")]
+fn local_time() -> (libc::tm, u32) {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
     let mut parts: libc::tm = unsafe { std::mem::zeroed() };
     // SAFETY: `localtime_r` writes a whole `tm` into the zeroed space and reads only the time zone
@@ -84,7 +107,7 @@ fn local_stamp() -> String {
     unsafe {
         libc::localtime_r(&(now.as_secs() as libc::time_t), &mut parts);
     }
-    format!("{:02}:{:02}:{:02}.{:03}", parts.tm_hour, parts.tm_min, parts.tm_sec, now.subsec_millis())
+    (parts, now.subsec_millis())
 }
 
 /// The gate itself, the other way round in each build: a prod build keeps no log, a debug build
@@ -115,5 +138,38 @@ mod tests {
         assert!(text.ends_with(&format!(" a line: {name}\n")), "{text}");
         let stamp = text.split(' ').next().unwrap();
         assert_eq!(stamp.len(), 12, "HH:MM:SS.mmm: {stamp}");
+    }
+
+    // The raw panel reports carry their own time, and the replay reads them back as the probe
+    // wrote them: nothing may be put in front of them.
+    #[cfg(feature = "debug")]
+    #[test]
+    fn a_line_that_carries_its_own_time_is_written_as_given() {
+        let name = format!("gate-check-line-{}", std::process::id());
+        let path = crate::logs_directory().join(format!("{name}.log"));
+        let _ = std::fs::remove_file(&path);
+        let log = FileLog::new(&name);
+        log.write_line("{\"t_ns\":7,\"hex\":\"07010000\"}\n");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(text, "{\"t_ns\":7,\"hex\":\"07010000\"}\n");
+    }
+
+    // A run's raw reports go to a file named by when the run started, and the oldest runs' files
+    // are dropped first: the names have to sort by age.
+    #[cfg(feature = "debug")]
+    #[test]
+    fn a_file_is_named_by_its_moment_so_that_names_sort_by_age() {
+        // 2026-01-02 03:04:05: every field but the year is a single digit, and still two wide.
+        let morning = libc::tm {
+            tm_year: 126,
+            tm_mon: 0,
+            tm_mday: 2,
+            tm_hour: 3,
+            tm_min: 4,
+            tm_sec: 5,
+            ..unsafe { std::mem::zeroed() }
+        };
+        assert_eq!(file_name_stamp(&morning), "20260102-030405");
     }
 }
