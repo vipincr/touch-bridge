@@ -178,10 +178,13 @@ impl HidTouchSource {
     /// Creates the source with its serial queue, without touching the panel. Nothing happens until
     /// `start`.
     pub fn new() -> Self {
-        // Swift: DispatchQueue(label: "com.gramini.touchnext.hid", qos: .userInteractive). The
-        // attribute makes it serial; the QoS floor gives it the user-interactive priority.
-        let queue = DispatchQueue::new(QUEUE_LABEL, DispatchQueueAttr::SERIAL);
-        let _ = queue.set_qos_class_floor(DispatchQoS::UserInteractive, 0);
+        // Swift: DispatchQueue(label: "com.gramini.touchnext.hid", qos: .userInteractive). The class
+        // is an attribute of the queue there, and is here: the reports arrive on this queue, and
+        // are handed on, at the user-interactive priority. (`set_qos_class_floor` is another call
+        // altogether: it sets the main thread's floor, and traps when another thread makes it.)
+        let attributes =
+            DispatchQueueAttr::with_qos_class(DispatchQueueAttr::SERIAL, DispatchQoS::UserInteractive, 0);
+        let queue = DispatchQueue::new(QUEUE_LABEL, Some(&attributes));
         Self {
             shared: Arc::new(Shared {
                 inner: Mutex::new(Inner {
@@ -431,7 +434,7 @@ fn attach(shared: &Arc<Shared>, boxed: DeviceBox) {
         inner.send_status(format!("seize failed: {}", describe(result)));
         return;
     }
-    let digitizer = page == u32::from(kHIDPage_Digitizer);
+    let digitizer = page == kHIDPage_Digitizer;
     if digitizer && vendor == WCH_VENDOR_ID {
         inner.wch_digitizer = Some(device.clone());
     }

@@ -25,7 +25,7 @@ impl Momentum {
     }
 
     /// The next frame's delta, or `None` once the motion has died out.
-    pub fn next(&mut self) -> Option<(f64, f64)> {
+    pub fn next_frame(&mut self) -> Option<(f64, f64)> {
         if self.vx.hypot(self.vy) < self.min_speed {
             return None;
         }
@@ -43,13 +43,13 @@ mod tests {
     #[test]
     fn slow_lift_has_no_momentum() {
         let mut m = Momentum::new(5.0, -5.0);
-        assert_eq!(m.next(), None);
+        assert_eq!(m.next_frame(), None);
     }
 
     #[test]
     fn first_step_is_velocity_times_frame_interval() {
         let mut m = Momentum::with_parameters(0.0, 1200.0, 1.0 / 120.0, 0.95, 20.0);
-        let step = m.next().expect("a 1200 points/s flick has momentum");
+        let step = m.next_frame().expect("a 1200 points/s flick has momentum");
         assert!(step.0.abs() < 1e-9);
         assert!((step.1 - 10.0).abs() < 1e-9);
     }
@@ -58,7 +58,7 @@ mod tests {
     fn steps_decay_and_eventually_stop() {
         let mut m = Momentum::with_parameters(3000.0, 0.0, 1.0 / 120.0, 0.95, 20.0);
         let mut steps: Vec<f64> = Vec::new();
-        while let Some(step) = m.next() {
+        while let Some(step) = m.next_frame() {
             steps.push(step.0);
         }
         assert!(steps.len() > 10 && steps.len() < 200);

@@ -4,11 +4,17 @@
 //! with "now" (contact expiry, the report census, gesture timing), so "now" must be read from the
 //! same clock and converted the same way. Both live here, once.
 
+/// Mach absolute time now, the ticks IOKit stamps reports and HID events with.
+#[cfg(target_os = "macos")]
+pub fn now_ticks() -> u64 {
+    // SAFETY: the call has no preconditions and never fails.
+    unsafe { mach2::mach_time::mach_absolute_time() }
+}
+
 /// Nanoseconds since boot, on the clock IOKit stamps reports with.
 #[cfg(target_os = "macos")]
 pub fn now_ns() -> u64 {
-    // SAFETY: neither call has preconditions; `mach_absolute_time` never fails.
-    unsafe { nanoseconds(mach2::mach_time::mach_absolute_time()) }
+    nanoseconds(now_ticks())
 }
 
 /// Converts a mach absolute timestamp into nanoseconds, through the mach timebase.
@@ -28,6 +34,12 @@ pub fn nanoseconds(ticks: u64) -> u64 {
         (u64::from(info.numer), denom)
     });
     ticks * numer / denom
+}
+
+/// Identity on hosts whose backend delivers no reports.
+#[cfg(not(target_os = "macos"))]
+pub fn now_ticks() -> u64 {
+    now_ns()
 }
 
 /// Nanoseconds since the process started, on hosts whose backend delivers no reports.

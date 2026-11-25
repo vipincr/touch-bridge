@@ -1,6 +1,46 @@
 # Changelog
 
-## 1.2.0 (2026-11-24) — JAPANNEXT JN-MD-IPST105FP support (vipincr fork)
+## 2.0.0 (2026-11-25) — Rust port
+
+- **TouchNext is written in Rust now.** `rust/` holds the whole driver in four crates: `touchcore`
+  (the gesture logic, with no system framework in it), `touchhid` (the panel over IOKit HID),
+  `touchplatform` (macOS I/O: displays, windows, event synthesis, Direct and Warp delivery, system
+  gestures, the pipeline) and `touchnext` (the menu-bar app and its diagnostics). The gestures,
+  thresholds, menu, log lines and command lines are those of 1.2.0.
+- **Build with `cargo`.** `scripts/bundle.sh` runs `cargo build --release` and signs the result as
+  before. A Rust toolchain (1.88 or later) replaces the Swift one, and `cargo test` replaces
+  `swift test`.
+- **Timers became deadlines.** The pipeline, the deliverer and the Dock swipe synthesizer each keep
+  their state in one struct and say when it can next change; one thread sleeps until a report
+  arrives or that moment passes. The Swift ran a 50 ms timer on the pipeline queue for as long as
+  the app was open.
+- **What the port leaves out:** the drag resampler (`DragResampler`, off by default in 1.2.0, with
+  its tests), `GestureConfig.tapSlopMm` (declared and never read) and the pipeline's `gestureStart`
+  (stored and never read).
+- Two texts no longer name the earlier panel: the menu's Display line waits for "the touch
+  display", and the probe's summary says "touch the screen".
+- **The log file and the diagnostics are a build option.** They exist only in a build with the
+  Cargo feature `debug`: `./scripts/bundle.sh --debug`, or `./scripts/install.sh --debug` to
+  install one for as long as a problem is being looked into. The default build is the prod build.
+  It opens no log file, builds no log line and has no diagnostic modes; given one of their
+  arguments, it says so and exits. The menu's status lines are in both builds; "Open Event Sink"
+  and "Open Logs Folder" are in the menu of a debug build only. Measured on the development Mac
+  (20 000 samples, release build): one log line cost 1.4 to 2.5 µs on the pipeline's thread, one
+  sample in a hundred past 5 µs and the worst at 1.4 ms, and a gesture wrote a few.
+- **The lines only the log reads are compiled out with it:** the deliverer's begin and dry-run
+  lines, and the result lines a second after each system gesture (which also read the Spaces and
+  the windows then). A status line the menu does not show no longer leaves the pipeline's thread
+  in either build.
+- **`--replay <recording>`** (debug build) runs a probe recording through the pipeline in dry run,
+  at the speed it was recorded and with the saved menu settings, and prints every line the
+  pipeline reports to the terminal. It posts nothing and does not take the panel.
+- **The press journal keeps its file open.** A press overwrites the file and a release empties it;
+  before, each click created the file and each release removed it. Same measurement: 5 µs a click
+  instead of 47 µs, and the worst click at 33 µs instead of 2 ms, on the path that leads to the
+  mouse-down. The guarantee is unchanged (a crash can't leave a button held), and the file stays
+  readable by the Swift app's journal.
+
+ — JAPANNEXT JN-MD-IPST105FP support (vipincr fork)
 
 - **New reference panel: JAPANNEXT JN-MD-IPST105FP** (10.5-inch IPS, 1920×1280, 5 reported contacts).
   Its WCH controller (`wch.cn`, USB `0x27C0:0x0859`) has its own report decoder: report ID `0x0D`,

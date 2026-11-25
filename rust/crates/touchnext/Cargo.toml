@@ -15,6 +15,8 @@ touchcore.workspace = true
 touchhid.workspace = true
 touchplatform.workspace = true
 libc.workspace = true
+serde = { workspace = true, features = ["derive"], optional = true }
+serde_json = { workspace = true, optional = true }
 
 objc2.workspace = true
 block2.workspace = true
@@ -25,3 +27,10 @@ objc2-core-graphics.workspace = true
 objc2-app-kit.workspace = true
 objc2-application-services.workspace = true
 objc2-io-kit.workspace = true
+objc2-service-management.workspace = true
+
+[features]
+# A build with the log file and the diagnostic modes (`./scripts/bundle.sh --debug`). Without it
+# nothing is logged and no diagnostic exists: the prod build.
+default = []
+debug = ["dep:serde", "dep:serde_json", "touchcore/debug", "touchplatform/debug"]

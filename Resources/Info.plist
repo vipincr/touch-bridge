@@ -13,14 +13,14 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.1.0</string>
+	<string>2.0.0</string>
 	<key>CFBundleVersion</key>
-	<string>22</string>
+	<string>30</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
-	<string>Personal touchscreen driver for the ARZOPA display.</string>
+	<string>Personal touchscreen driver for USB touch monitors.</string>
 </dict>
 </plist>

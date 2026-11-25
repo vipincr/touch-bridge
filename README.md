@@ -2,7 +2,7 @@
 
 **A real touchscreen for macOS, for USB touch monitors.** Touches act where you touch, the cursor stays where it is, and the trackpad's gestures work with your fingers on the screen: scrolling, pinch, rotate, Mission Control, Spaces, Launchpad, Notification Center and Safari's back/forward page swipes.
 
-TouchNext is a small menu-bar app that runs in user space:
+TouchNext is a small menu-bar app, written in Rust, that runs in user space:
 - It takes over the touch panel and recognizes gestures itself.
 - It sends macOS the same events a trackpad and mouse would, aimed at the window under your fingers.
 - No kernel or system extension, no root, and System Integrity Protection stays on.
@@ -132,7 +132,7 @@ The upstream project's reference panel (ARZOPA 1920×1080, ILITEK `0x222A:0x0001
 
 **What the input layer does automatically now:**
 
-1. **Device discovery** matches any USB HID touch-screen digitizer (usage page 0x0D, usage touch screen), excluding Apple's own devices, and logs the product name and USB IDs of what it seized.
+1. **Device discovery** matches any USB HID touch-screen digitizer (usage page 0x0D, usage touch screen), excluding Apple's own devices. The menu's Panel line names what it seized, with its USB IDs (a debug build's log does too).
 2. **The report format** (ILITEK family) derives the contact-slot count from each report's own length, so 10-contact panels padded to 64 bytes and shorter 5-contact reports both parse.
 3. **The display** is found by its EDID vendor and model numbers when they match, and otherwise falls back to the single external display — an unlisted panel works without editing anything.
 4. **The physical size** used for gesture thresholds defaults to the JN-MD-IPST105FP's active area (221.9 × 147.9 mm) and is set in one place (`PipelineSettings`).
@@ -157,7 +157,7 @@ TouchNext therefore reads the single-touch mouse reports, and replugging changes
 
 - **macOS 15 (Sequoia).** Developed on 15.7; other versions are untested. TouchNext relies on undocumented event formats that can change between macOS releases (see [Caveats](#caveats)).
 - **An Apple silicon Mac.** Intel is untested.
-- **A Swift 6 toolchain** (Xcode 16 or later, or the matching command-line tools).
+- **A Rust toolchain**, 1.88 or later (`rustup` installs it), plus Xcode's command-line tools for `codesign`.
 - **No other touchscreen driver** running, such as UPDD or Touchscreen Gestures. They take the panel exclusively, and so does TouchNext.
 
 ## Install
@@ -181,7 +181,7 @@ TouchNext therefore reads the single-touch mouse reports, and replugging changes
    ./scripts/install.sh
    ```
    This does four things:
-   - builds `build/TouchNext.app`;
+   - builds `build/TouchNext.app`, the prod build (it keeps no log and has no diagnostics);
    - copies it to `~/Applications/TouchNext.app`;
    - turns on Start at Login;
    - starts it.
@@ -192,7 +192,7 @@ TouchNext therefore reads the single-touch mouse reports, and replugging changes
 
 5. **Touch the screen.** The ✋ menu shows whether the panel and the touch display were found.
 
-**To update:** pull the latest changes and run `./scripts/install.sh` again. Rebuilding with `./scripts/bundle.sh` never touches the installed copy.
+**To update:** pull the latest changes and run `./scripts/install.sh` again. Rebuilding with `./scripts/bundle.sh` never touches the installed copy. `./scripts/install.sh --debug` installs a debug build instead, which keeps a log and has the diagnostics ([Logs and diagnostics](#logs-and-diagnostics)).
 
 ## The menu
 
@@ -213,10 +213,10 @@ TouchNext lives in the menu bar as ✋. Settings are saved across restarts, exce
 | Launchpad on the Touch Display | **Bring the Dock Over, Then Back** (default): the Dock comes over for Launchpad and goes back afterwards. **Bring the Dock Over (it stays)**: the Dock stays on the touch display. **Leave the Dock Where It Is**: Launchpad opens wherever the Dock is. |
 | Return Focus to Previous App | After you tap an app on the touch display, gives focus back to the app you were using about 0.6 s later. Off by default: focus follows touch. |
 | Keep Focus When Switching Spaces | After a Space switch on the touch display, gives focus back to the app on the other screen (default on) |
-| Dry Run (log only) | Recognizes gestures and logs them without sending anything |
+| Dry Run | Recognizes gestures without sending anything; the Last gesture line shows them. In a debug build the log has them too. |
 | Start at Login | Runs TouchNext at login and restarts it if it crashes. Quit from the menu stays quit until the next login. |
-| Open Event Sink | A test window on the touch display. It logs every event it receives and paints touches: TUIO fingers in colour, the mouse in grey. |
-| Open Logs Folder | Opens `~/Library/Logs/TouchNext/` |
+| Open Event Sink (debug build) | A test window on the touch display. It logs every event it receives and paints touches: TUIO fingers in colour, the mouse in grey. |
+| Open Logs Folder (debug build) | Opens `~/Library/Logs/TouchNext/` |
 
 ## How it works
 
@@ -228,7 +228,7 @@ touch panel ──HID──▶ ReportParser ─▶ ContactTracker ─▶ Gesture
 
 **Taking the panel.** TouchNext opens the touch panel with exclusive access (`kIOHIDOptionsTypeSeizeDevice`), so macOS stops turning touches into cursor movements. It reads the raw multitouch reports itself, parses each finger's position, and tracks contacts across frames. Panel coordinates are mapped onto the touch display's current bounds, updated live when displays are rearranged. Rotation is supported in the mapping but hasn't been tested on hardware.
 
-**Recognizing gestures.** `GestureRecognizer` is pure Swift with no system frameworks, and it is unit tested, including replays of a real panel recording. Nothing is sent until a gesture is classified. Two-finger gestures are classified by how the fingers move:
+**Recognizing gestures.** `GestureRecognizer` is pure Rust with no system frameworks, and it is unit tested, including replays of a real panel recording. Nothing is sent until a gesture is classified. Two-finger gestures are classified by how the fingers move:
 - both the same way → scroll;
 - towards or away from each other → pinch;
 - around each other → rotate.
@@ -268,33 +268,33 @@ You'll change a few constants and possibly the report parser, then rebuild.
    ```bash
    ioreg -p IOUSB -l -w0 | grep -E '"USB Product Name"|"idVendor"|"idProduct"'
    ```
-   TouchNext logs the product name and USB IDs of whatever it seized.
+   The menu's Panel line names the panel TouchNext seized, with its USB IDs; a debug build's log does too.
 
-2. **Record the panel's reports.** With nothing else holding the panel, build with `./scripts/bundle.sh`, then run:
+2. **Record the panel's reports.** With nothing else holding the panel, build with `./scripts/bundle.sh --debug`, then run:
    ```bash
    open -n build/TouchNext.app --args --probe 90
    ```
    Touch with one, two and three fingers. `~/Library/Logs/TouchNext/` gets the raw reports (`probe-*.jsonl`) and a summary.
 
-3. **Adapt the parser.** `Sources/TouchCore/ReportParser.swift` has one decoder per supported controller family: WCH (report ID `0x0D`; the JN-MD-IPST105FP) and ILITEK (report ID 4; the ARZOPA, with the slot count derived from the report length). For another format, read your panel's HID report descriptor:
+3. **Adapt the parser.** `rust/crates/touchcore/src/report.rs` has one decoder per supported controller family: WCH (report ID `0x0D`; the JN-MD-IPST105FP) and ILITEK (report ID 4; the ARZOPA, with the slot count derived from the report length). For another format, read your panel's HID report descriptor:
    ```bash
    ioreg -r -n TouchScreen -l -w0 | grep ReportDescriptor
    ```
-   decode the touch collection (report ID, per-contact field order and sizes, logical maximums, where the contact count lives) and add a decoder alongside the two. Add your recording as a replay test next to `Tests/TouchCoreTests/Fixtures/`.
+   decode the touch collection (report ID, per-contact field order and sizes, logical maximums, where the contact count lives) and add a decoder alongside the two. Add your recording to `Tests/TouchCoreTests/Fixtures/` and a replay test for it to `rust/crates/touchcore/tests/replay.rs`.
 
 4. **Point it at your display.** With exactly one external display, nothing to do: the pipeline falls back to it when no EDID match is configured. To pin it exactly, run the read-only probe:
    ```bash
    open -g -n build/TouchNext.app --args --ax-probe --menubar
    ```
-   `axprobe.log` lists every display with its vendor and model numbers. Set `displayVendor` and `displayModel` in `PipelineSettings` (`Sources/TouchPlatform/InputPipeline.swift`). The self-test in `SystemUISelfTest.swift` uses the same numbers.
+   `axprobe.log` (from a debug build) lists every display with its vendor and model numbers. Set `display_vendor` and `display_model` in `PipelineSettings` (`rust/crates/touchplatform/src/pipeline.rs`). The diagnostics take the touch display from these same numbers.
 
-5. **Set the physical size.** Set `panelWidthMm` and `panelHeightMm` in `PipelineSettings` (`Sources/TouchPlatform/InputPipeline.swift`) to the panel's active area. Gesture thresholds are in millimetres.
+5. **Set the physical size.** Set `panel_width_mm` and `panel_height_mm` in `PipelineSettings` (the same file) to the panel's active area. Gesture thresholds are in millimetres.
 
-6. **Check the multitouch switch.** The ILITEK panel needs feature reports 2 and 6 read before it leaves single-touch mode (`requestMultitouchMode` in `HIDTouchSource.swift`); this happens automatically for ILITEK controllers only. A WCH `0x0859` controller acknowledges the Input Mode write TouchNext sends and ignores it on macOS (see the hardware note).
+6. **Check the multitouch switch.** The ILITEK panel needs feature reports 2 and 6 read before it leaves single-touch mode (`request_multitouch_mode` in `rust/crates/touchhid/src/macos.rs`); this happens automatically for ILITEK controllers only. A WCH `0x0859` controller acknowledges the Input Mode write TouchNext sends and ignores it on macOS (see the hardware note).
 
 7. **Test and install.**
    ```bash
-   swift test
+   cargo test --manifest-path rust/Cargo.toml --workspace
    ```
    ```bash
    ./scripts/install.sh
@@ -304,17 +304,19 @@ Making all of this automatic would be the natural next step: parsing any standar
 
 ## Logs and diagnostics
 
-Logs are in `~/Library/Logs/TouchNext/`:
-- `touchbridge.log`: every gesture, and how and where it was delivered;
+Only a debug build keeps a log and has the diagnostics: one made with `./scripts/bundle.sh --debug`, which turns on the Cargo feature `debug`. The build `./scripts/install.sh` installs is the prod build. It opens no log file and has no diagnostics; given one of their arguments, it says so and exits. The menu's status lines are there in both builds. To read what the installed copy does, install a debug build for the while: `./scripts/install.sh --debug`.
+
+A debug build's logs are in `~/Library/Logs/TouchNext/`:
+- `touchnext.log`: every gesture, and how and where it was delivered;
 - `eventsink.log`: what the Event Sink test window received;
 - other files from the diagnostic modes below.
 
-Diagnostic modes run on the development build (`build/TouchNext.app`, made by `./scripts/bundle.sh`). Most run next to the installed copy. The ones marked † need the panel, or the single running instance, so quit the installed copy first (✋ → Quit TouchNext).
+Diagnostic modes run on a debug build (`./scripts/bundle.sh --debug` leaves it in `build/TouchNext.app`). Most run next to the installed copy. The ones marked † need the panel, or the single running instance, so quit the installed copy first (✋ → Quit TouchNext).
 
 | Command (`open -n build/TouchNext.app --args …`) | What it does |
 |---|---|
 | `--probe 90` † | Records raw panel reports for 90 s |
-| `--dry-run` † | Recognizes and logs gestures without sending anything |
+| `--dry-run` † | Starts the app in Dry Run: it recognizes and logs gestures without sending anything |
 | `--event-sink` | Opens the Event Sink test window. It logs every event it receives, including those AppKit's swipe tracker takes first, and paints TUIO fingers (listening on port 3333) and mouse strokes. |
 | `--direct-selftest` | Posts test events to the Event Sink only (`--swipe` adds the page-swipe variants) |
 | `--ax-probe --map` | Read-only map of the window-drag areas on screen |
@@ -324,6 +326,14 @@ Diagnostic modes run on the development build (`build/TouchNext.app`, made by `.
 | `--system-ui-selftest` | Opens and closes Notification Center and Launchpad (`--nc`, `--launchpad`, `--move-dock`, `--spaces`) and logs where each appeared. **Visible on screen.** |
 
 Add `-g` after `open` to keep a diagnostic run in the background.
+
+`--replay` prints to the terminal, so it runs from a shell, on the executable inside the bundle:
+
+```bash
+build/TouchNext.app/Contents/MacOS/TouchNext --replay ~/Library/Logs/TouchNext/probe-x.jsonl
+```
+
+It runs a probe recording through the pipeline in dry run, at the speed it was recorded and with the saved menu settings, and prints every line the pipeline reports: what it would have delivered, and where. It posts nothing and does not take the panel.
 
 ## Troubleshooting
 
@@ -369,27 +379,33 @@ Add `-g` after `open` to keep a diagnostic run in the background.
 ## Development
 
 ```bash
-swift test
+cargo test --manifest-path rust/Cargo.toml --workspace
+cargo test --manifest-path rust/Cargo.toml --workspace --features debug
 ```
 ```bash
-./scripts/bundle.sh
+./scripts/bundle.sh --debug
 ```
 ```bash
 ./scripts/install.sh
 ```
 
-- `swift test` runs the unit tests, the delivery tests and the replay of a real panel recording.
-- `./scripts/bundle.sh` builds and signs `build/TouchNext.app` for development.
-- `./scripts/install.sh` builds, installs to `~/Applications` and restarts the login item.
+- `cargo test` runs the unit tests, the delivery tests and the replay of two recorded panel sessions, on the prod build's code. The second command runs them again with the `debug` feature: the log and the diagnostics are compiled only then, so that pass is theirs.
+- `./scripts/bundle.sh` builds and signs `build/TouchNext.app`: the prod build, or with `--debug` the one with the log and the diagnostics.
+- `./scripts/install.sh` builds, installs to `~/Applications` and restarts the login item. `--debug` installs a debug build.
 - `CHANGELOG.md` lists the changes in each version.
 
 | Path | Contents |
 |---|---|
-| `Sources/TouchCore` | Pure Swift: report parser, contact tracker, coordinate mapping, gesture recognizer, delivery policy, focus and Dock logic. No system frameworks; fully unit tested. |
-| `Sources/TouchPlatform` | macOS I/O: HID input, displays and windows, event synthesis, Direct and Warp delivery, system gestures, diagnostics |
-| `Sources/TouchNextApp` | The menu-bar app: menu, saved settings, login item, Event Sink, probe |
-| `Tests` | Unit tests and replays; `Tests/TouchCoreTests/Fixtures` holds the panel recording |
+| `rust/crates/touchcore` | Pure logic: report parser, contact tracker, coordinate mapping, gesture recognizer, delivery policy, focus and Dock logic. No system frameworks; fully unit tested. |
+| `rust/crates/touchhid` | The touch panel over IOKit HID, and the clock the driver runs on |
+| `rust/crates/touchplatform` | macOS I/O: displays and windows, event synthesis, Direct and Warp delivery, system gestures, the pipeline that connects them, diagnostics |
+| `rust/crates/touchnext` | The menu-bar app: menu, saved settings, login item. With the `debug` feature also the log file, the Event Sink, the probe and the replay |
+| `Tests/TouchCoreTests/Fixtures` | Two recorded panel sessions, replayed by the tests in `rust/crates/touchcore/tests` |
 | `docs` | The original plan with implementation notes (`spec.md`) and per-feature investigations (`backlog.md`) |
+
+Apple's frameworks are reached through the `objc2` bindings; the tree holds no hand-written `extern` block. The private calls the headers leave out are looked up by name at run time.
+
+`Sources/` and `Tests/` still hold the Swift implementation this Rust port replaced, and go once the port is confirmed on the hardware.
 
 ## Caveats
 

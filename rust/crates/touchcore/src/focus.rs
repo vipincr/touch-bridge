@@ -33,11 +33,10 @@ impl FocusKeeper {
     /// The caller polls (its own cadence); `frontmost` is the pid of the
     /// frontmost app, or `None` when macOS reports nothing frontmost.
     pub fn poll(&self, frontmost: Option<i32>, now_ns: u64) -> Action {
-        if let Some(frontmost) = frontmost {
-            if frontmost != self.pid {
+        if let Some(frontmost) = frontmost
+            && frontmost != self.pid {
                 return Action::Restore(self.pid);
             }
-        }
         if now_ns.wrapping_sub(self.started_ns) >= Self::WINDOW_NS {
             Action::Stop
         } else {

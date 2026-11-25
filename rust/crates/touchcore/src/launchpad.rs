@@ -70,11 +70,10 @@ impl LaunchpadDock {
         if let Some(current) = displays.iter().copied().find(|d| *d != touch && d.contains(dock)) {
             return Some(current);
         }
-        if let Some(main) = main {
-            if main != touch {
+        if let Some(main) = main
+            && main != touch {
                 return Some(main);
             }
-        }
         displays.iter().copied().find(|d| *d != touch)
     }
 }
@@ -176,13 +175,13 @@ mod tests {
         watch.poll(true, false, 250 * MS);
         assert_eq!(watch.poll(false, false, 500 * MS), Action::Wait);
         assert_eq!(watch.poll(true, false, 750 * MS), Action::Wait);
-        assert_eq!(watch.poll(false, false, 1 * S), Action::Wait);
+        assert_eq!(watch.poll(false, false, S), Action::Wait);
     }
 
     #[test]
     fn if_launchpad_never_opens_the_dock_still_goes_back_after_two_seconds() {
         let mut watch = DockReturnWatch::new(0);
-        assert_eq!(watch.poll(false, false, 1 * S), Action::Wait);
+        assert_eq!(watch.poll(false, false, S), Action::Wait);
         assert_eq!(watch.poll(false, false, 2 * S), Action::PushBack);
     }
 
@@ -192,7 +191,7 @@ mod tests {
         watch.poll(true, false, 250 * MS);
         watch.poll(false, true, 500 * MS);
         assert_eq!(watch.poll(false, true, 750 * MS), Action::Wait, "the cursor is busy with a touch");
-        assert_eq!(watch.poll(false, false, 1 * S), Action::PushBack);
+        assert_eq!(watch.poll(false, false, S), Action::PushBack);
     }
 
     #[test]

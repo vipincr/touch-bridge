@@ -2,19 +2,31 @@
 # Builds TouchNext.app into ./build and signs it.
 # Signing with a stable identity keeps macOS privacy grants (Accessibility, Input Monitoring) across rebuilds;
 # ad-hoc signing works but macOS forgets the grants after every build.
+#
+# The build is the prod one by default: it keeps no log and has no diagnostics. `--debug` adds both
+# (the Cargo feature `debug`).
 set -euo pipefail
 
 cd "${0:A:h}/.."
 IDENTITY="${TOUCHNEXT_SIGN_IDENTITY:-TouchNext Dev}"
 APP="build/TouchNext.app"
 
-swift build -c release --product TouchNextApp
+FEATURES=()
+case "${1:-}" in
+    "") BUILD="prod" ;;
+    --debug) FEATURES=(--features debug); BUILD="debug" ;;
+    *) echo "usage: $0 [--debug]" >&2; exit 2 ;;
+esac
+
+# The binary must run on the oldest system the bundle declares (LSMinimumSystemVersion, 14.0).
+MACOSX_DEPLOYMENT_TARGET=14.0 cargo build --release --manifest-path rust/Cargo.toml --bin TouchNext "${FEATURES[@]}"
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp .build/release/TouchNextApp "$APP/Contents/MacOS/TouchNext"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Library/LaunchAgents"
+cp rust/target/release/TouchNext "$APP/Contents/MacOS/TouchNext"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
-mkdir -p "$APP/Contents/Library/LaunchAgents"
+# The agent TouchNext registered in versions before 1.0 (SMAppService); the app removes that
+# registration at startup, which needs the plist in its bundle.
 cp Resources/com.gramini.touchnext.plist "$APP/Contents/Library/LaunchAgents/"
 
 if security find-identity -p codesigning | grep -qF "\"$IDENTITY\""; then
@@ -30,4 +42,4 @@ else
 fi
 
 codesign --verify --verbose=1 "$APP"
-echo "Built $PWD/$APP"
+echo "Built $PWD/$APP ($BUILD build)"

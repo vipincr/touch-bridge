@@ -55,11 +55,10 @@ impl ProbeStats {
 
     pub fn record(&mut self, timestamp_ns: u64, report_id: u8, frame: Option<&TouchFrame>) {
         *self.reports_by_id.entry(report_id).or_insert(0) += 1;
-        if let Some(last) = self.last_timestamp_ns {
-            if timestamp_ns > last && self.intervals_ns.len() < Self::SAMPLE_LIMIT {
+        if let Some(last) = self.last_timestamp_ns
+            && timestamp_ns > last && self.intervals_ns.len() < Self::SAMPLE_LIMIT {
                 self.intervals_ns.push(timestamp_ns - last);
             }
-        }
         self.last_timestamp_ns = Some(timestamp_ns);
 
         let Some(frame) = frame else { return };
@@ -70,11 +69,10 @@ impl ProbeStats {
         self.max_simultaneous_contacts = self.max_simultaneous_contacts.max(touching);
         self.distinct_contact_ids.extend(frame.contacts.iter().map(|c| c.id));
         if let Some(scan_time) = frame.scan_time {
-            if let Some(last) = self.last_scan_time {
-                if scan_time > last && self.scan_time_steps.len() < Self::SAMPLE_LIMIT {
+            if let Some(last) = self.last_scan_time
+                && scan_time > last && self.scan_time_steps.len() < Self::SAMPLE_LIMIT {
                     self.scan_time_steps.push(scan_time - last);
                 }
-            }
             self.last_scan_time = Some(scan_time);
         }
     }

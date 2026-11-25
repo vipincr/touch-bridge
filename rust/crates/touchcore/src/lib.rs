@@ -13,11 +13,15 @@ pub mod focus;
 pub mod gestures;
 pub mod launchpad;
 pub mod mapper;
+/// The menu-bar geometry the self-tests map points between displays with: a diagnostic.
+#[cfg(feature = "debug")]
 pub mod menubar;
 pub mod mode;
 pub mod momentum;
 pub mod policy;
 pub mod prefs;
+/// The probe's report statistics: a diagnostic, in a build with the `debug` feature only.
+#[cfg(feature = "debug")]
 pub mod probe;
 pub mod report;
 pub mod traits;

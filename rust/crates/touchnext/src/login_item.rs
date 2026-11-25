@@ -9,13 +9,21 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use objc2_foundation::NSString;
+use objc2_service_management::{SMAppService, SMAppServiceStatus};
+
+/// The launch agent's label, as launchd and the app both name it.
 pub const LABEL: &str = "com.gramini.touchnext.agent";
+
+/// The earlier SMAppService registration (a bundle plist), removed on startup if still present.
+const LEGACY_PLIST_NAME: &str = "com.gramini.touchnext.plist";
 
 /// Where the agent's property list lives.
 pub fn plist_path() -> PathBuf {
     crate::home_dir().join("Library/LaunchAgents").join(format!("{LABEL}.plist"))
 }
 
+/// Whether the launch agent is in place.
 pub fn is_enabled() -> bool {
     plist_path().is_file()
 }
@@ -37,7 +45,7 @@ pub fn describe() -> String {
 pub fn enable() -> Result<(), String> {
     let executable = std::env::current_exe().map_err(|error| format!("no executable path: {error}"))?;
     let path = plist_path();
-    let agent_log = crate::log::FileLog::directory().join("agent.log");
+    let agent_log = crate::logs_directory().join("agent.log");
     let plist = agent_plist(&executable, &agent_log);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| format!("{}: {error}", parent.display()))?;
@@ -65,6 +73,22 @@ pub fn hand_over_to_launchd() {
     let script = format!("sleep 1; /bin/launchctl kickstart {}", service());
     // The shell outlives this process, so it is neither waited for nor killed with it.
     let _ = Command::new("/bin/sh").args(["-c", &script]).spawn();
+}
+
+/// Removes the earlier SMAppService login item, which can no longer start rebuilt copies. True when
+/// one was registered.
+pub fn remove_legacy_registration() -> bool {
+    // SAFETY: the calls only read and change this app's own login-item registration, and the
+    // service is a live object the call above returned.
+    unsafe {
+        let legacy = SMAppService::agentServiceWithPlistName(&NSString::from_str(LEGACY_PLIST_NAME));
+        match legacy.status() {
+            SMAppServiceStatus::Enabled | SMAppServiceStatus::RequiresApproval => {}
+            _ => return false,
+        }
+        let _ = legacy.unregisterAndReturnError();
+    }
+    true
 }
 
 fn service() -> String {

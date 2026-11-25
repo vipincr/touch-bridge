@@ -37,11 +37,10 @@ impl PanelModeWatch {
         match source {
             Source::Mouse => {
                 self.saw_mouse = true;
-                if let Some(last) = self.last_request_ns {
-                    if at_ns - last < Self::RETRY_INTERVAL_NS {
+                if let Some(last) = self.last_request_ns
+                    && at_ns - last < Self::RETRY_INTERVAL_NS {
                         return None;
                     }
-                }
                 self.last_request_ns = Some(at_ns);
                 Some(Action::RequestMultitouch)
             }
@@ -78,7 +77,7 @@ mod tests {
     fn requests_are_rate_limited() {
         let mut watch = PanelModeWatch::default();
         let _ = watch.observe(Source::Mouse, 0);
-        assert_eq!(watch.observe(Source::Mouse, 1 * S), None);
+        assert_eq!(watch.observe(Source::Mouse, S), None);
         assert_eq!(watch.observe(Source::Mouse, 6 * S), Some(Action::RequestMultitouch));
     }
 
@@ -86,7 +85,7 @@ mod tests {
     fn the_switch_back_to_multitouch_is_reported_once() {
         let mut watch = PanelModeWatch::default();
         let _ = watch.observe(Source::Mouse, 0);
-        assert_eq!(watch.observe(Source::Digitizer, 1 * S), Some(Action::MultitouchRestored));
+        assert_eq!(watch.observe(Source::Digitizer, S), Some(Action::MultitouchRestored));
         assert_eq!(watch.observe(Source::Digitizer, 2 * S), None);
     }
 
@@ -101,7 +100,7 @@ mod tests {
     fn a_slip_after_restoration_asks_again() {
         let mut watch = PanelModeWatch::default();
         assert_eq!(watch.observe(Source::Mouse, 0), Some(Action::RequestMultitouch));
-        assert_eq!(watch.observe(Source::Digitizer, 1 * S), Some(Action::MultitouchRestored));
+        assert_eq!(watch.observe(Source::Digitizer, S), Some(Action::MultitouchRestored));
         // The panel slips back mid-session: the next mouse frame asks again
         // without delay.
         assert_eq!(watch.observe(Source::Mouse, 20 * S), Some(Action::RequestMultitouch));

@@ -461,13 +461,12 @@ impl GestureRecognizer {
         let mut actions: SmallVec<[GestureAction; 8]> = SmallVec::new();
         // A drag grace past its deadline commits the held press, even with no contact events to
         // carry it (the pipeline pumps this with an empty event list from its timer).
-        if let State::DragGrace { kind, last, until_ns, samples, .. } = &self.state {
-            if at_ns >= *until_ns {
+        if let State::DragGrace { kind, last, until_ns, samples, .. } = &self.state
+            && at_ns >= *until_ns {
                 let action = grace_end(&self.config, *kind, *last, samples, at_ns);
                 self.state = State::Idle;
                 actions.push(action);
             }
-        }
         self.two_finger_moved = false;
         self.three_finger_moved = false;
         self.multi_finger_moved = false;
@@ -498,21 +497,18 @@ impl GestureRecognizer {
         }
         // Both fingers of a frame move together; evaluate the two-finger gesture once per frame.
         // (Same for three fingers and for the dock swipe.)
-        if self.two_finger_moved {
-            if let State::TwoFinger(g) = &mut self.state {
+        if self.two_finger_moved
+            && let State::TwoFinger(g) = &mut self.state {
                 actions.extend(update_two_finger(&self.config, g, at_ns));
             }
-        }
-        if self.three_finger_moved {
-            if let State::ThreeFinger(t) = &mut self.state {
+        if self.three_finger_moved
+            && let State::ThreeFinger(t) = &mut self.state {
                 actions.extend(update_three_finger(&self.config, t));
             }
-        }
-        if self.multi_finger_moved {
-            if let State::MultiFinger(m) = &mut self.state {
+        if self.multi_finger_moved
+            && let State::MultiFinger(m) = &mut self.state {
                 actions.extend(update_multi_finger(&self.config, m));
             }
-        }
         actions
     }
 
@@ -526,6 +522,16 @@ impl GestureRecognizer {
         c.four_finger_horizontal_swipe = true;
         c.four_finger_pinch = true;
         c.notification_center_swipe = true;
+    }
+
+    /// The earliest time at which the recognizer changes state with no further input: the end of a
+    /// drag grace that is holding a press. `None` when only new events can move it, which lets the
+    /// caller sleep until an event arrives or this time passes.
+    pub fn next_deadline_ns(&self) -> Option<u64> {
+        match &self.state {
+            State::DragGrace { until_ns, .. } => Some(*until_ns),
+            _ => None,
+        }
     }
 
     /// More fingers than a one-, two- or three-finger gesture allows; four or five may form a
@@ -1422,8 +1428,7 @@ mod tests {
 
     impl Script {
         fn build(one_finger_drag: OneFingerDragMode, configure: impl FnOnce(&mut GestureConfig)) -> Self {
-            let mut config = GestureConfig::default();
-            config.one_finger_drag = one_finger_drag;
+            let mut config = GestureConfig { one_finger_drag, ..GestureConfig::default() };
             configure(&mut config);
             Self { recognizer: GestureRecognizer::new(config), actions: Vec::new() }
         }
@@ -2366,6 +2371,19 @@ mod tests {
             s.actions.last(),
             Some(&GestureAction::DragEnded { at: PanelPoint::new(0.3 + mm_x(12.0), 0.3) })
         );
+    }
+
+    #[test]
+    fn a_held_grace_reports_its_deadline_and_nothing_else_does() {
+        let mut s = Script::configured(|c| c.drag_grace_ns = 150_000_000);
+        assert_eq!(s.recognizer.next_deadline_ns(), None);
+        s.at(0, &[began(0, 0.3, 0.3)]);
+        s.at(50, &[moved(0, 0.3 + mm_x(12.0), 0.3)]);
+        assert_eq!(s.recognizer.next_deadline_ns(), None);
+        s.at(60, &[ended(0, 0.3 + mm_x(12.0), 0.3)]);
+        assert_eq!(s.recognizer.next_deadline_ns(), Some(60 * MS + 150_000_000));
+        s.at(220, &[]);
+        assert_eq!(s.recognizer.next_deadline_ns(), None);
     }
 
     #[test]

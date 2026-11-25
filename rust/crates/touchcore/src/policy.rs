@@ -117,7 +117,7 @@ impl WindowHitTester {
     /// The frontmost window under the point. `windows` must be front-to-back,
     /// as CGWindowListCopyWindowInfo returns it; the driver's own windows are
     /// excluded by pid, as are invisible ones (alpha 0).
-    pub fn top_window<'a>(point: ScreenPoint, windows: &'a [WindowInfo], excluding_pid: i32) -> Option<&'a WindowInfo> {
+    pub fn top_window(point: ScreenPoint, windows: &[WindowInfo], excluding_pid: i32) -> Option<&WindowInfo> {
         windows
             .iter()
             .find(|w| w.pid != excluding_pid && w.alpha > 0.0 && w.contains(point))
@@ -236,6 +236,8 @@ impl DeliveryPolicy {
 mod tests {
     use super::*;
 
+    /// A window with every field given: the nine are what a `WindowInfo` holds.
+    #[allow(clippy::too_many_arguments)]
     fn window(
         number: i64,
         pid: i32,

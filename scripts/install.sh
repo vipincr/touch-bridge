@@ -5,6 +5,9 @@
 # "Start at Login" is a per-user launch agent (~/Library/LaunchAgents/com.gramini.touchnext.agent.plist)
 # that runs the installed executable by path, so updating the app in place keeps it working.
 # The first install turns it on (the app writes the agent itself).
+#
+# The copy installed is the prod build. `--debug` installs one that keeps a log and has the
+# diagnostics instead, for as long as a problem is being looked into.
 set -euo pipefail
 
 cd "${0:A:h}/.."
@@ -13,7 +16,7 @@ LABEL="com.gramini.touchnext.agent"
 AGENT="$HOME/Library/LaunchAgents/$LABEL.plist"
 JOB="gui/$(id -u)/$LABEL"
 
-./scripts/bundle.sh
+./scripts/bundle.sh "$@"
 
 # Quit every running TouchNext (a normal Quit: the agent does not restart it), so the panel is free.
 pkill -TERM -x TouchNext || true

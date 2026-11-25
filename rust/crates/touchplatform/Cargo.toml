@@ -6,6 +6,11 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+# The diagnostics: the self-tests and the probes, and the pipeline's result lines for the log.
+# Off in the prod build.
+debug = ["touchcore/debug"]
+
 [dependencies]
 touchcore.workspace = true
 touchhid.workspace = true

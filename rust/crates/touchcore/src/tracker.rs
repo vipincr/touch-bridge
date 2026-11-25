@@ -74,6 +74,16 @@ pub struct ContactTracker {
 }
 
 impl ContactTracker {
+    /// Swift's default arguments: the kernel's 100 ms liftoff timeout, the 60 ms WCH flap window, a
+    /// 15 mm adoption base at 0.75 speed gain, and the JN-MD-IPST105FP's 221.9 mm by 147.9 mm
+    /// active area.
+    const DEFAULT_LIFT_TIMEOUT_NS: u64 = 100_000_000;
+    const DEFAULT_DEBOUNCE_NS: u64 = 60_000_000;
+    const DEFAULT_ADOPTION_BASE_MM: f64 = 15.0;
+    const DEFAULT_ADOPTION_SPEED_GAIN: f64 = 0.75;
+    const DEFAULT_PANEL_WIDTH_MM: f64 = 221.9;
+    const DEFAULT_PANEL_HEIGHT_MM: f64 = 147.9;
+
     pub fn new(
         lift_timeout_ns: u64,
         debounce_ns: u64,
@@ -94,6 +104,19 @@ impl ContactTracker {
             panel_width_mm,
             panel_height_mm,
         }
+    }
+
+    /// A tracker with the default timeouts and adoption for a panel whose active area is
+    /// `panel_width_mm` by `panel_height_mm`.
+    pub fn for_panel(panel_width_mm: f64, panel_height_mm: f64) -> Self {
+        Self::new(
+            Self::DEFAULT_LIFT_TIMEOUT_NS,
+            Self::DEFAULT_DEBOUNCE_NS,
+            Self::DEFAULT_ADOPTION_BASE_MM,
+            Self::DEFAULT_ADOPTION_SPEED_GAIN,
+            panel_width_mm,
+            panel_height_mm,
+        )
     }
 
     pub fn active_count(&self) -> usize {
@@ -133,8 +156,8 @@ impl ContactTracker {
                     same_id_adopted = true;
                 }
             }
-            if !same_id_adopted {
-                if let Some((old_id, press)) = self.nearest_pending(contact, at_ns) {
+            if !same_id_adopted
+                && let Some((old_id, press)) = self.nearest_pending(contact, at_ns) {
                     // A different id near a held lift's finger: the same finger
                     // under a new number (id churn, or the mouse stream's
                     // contact 0 after a flap). The moved pass below reports the
@@ -143,7 +166,6 @@ impl ContactTracker {
                     self.alias.insert(contact.id, old_id);
                     self.active.insert(old_id, press);
                 }
-            }
         }
 
         // An aliased contact keeps its press alive under the canonical id, this
@@ -295,11 +317,15 @@ impl ContactTracker {
 }
 
 impl Default for ContactTracker {
-    /// Swift's default arguments: the kernel's 100 ms liftoff timeout, the 60 ms
-    /// WCH flap window, a 15 mm adoption base at 0.75 speed gain, and the
-    /// JN-MD-IPST105FP's 221.9 mm by 147.9 mm active area.
     fn default() -> Self {
-        Self::new(100_000_000, 60_000_000, 15.0, 0.75, 221.9, 147.9)
+        Self::new(
+            Self::DEFAULT_LIFT_TIMEOUT_NS,
+            Self::DEFAULT_DEBOUNCE_NS,
+            Self::DEFAULT_ADOPTION_BASE_MM,
+            Self::DEFAULT_ADOPTION_SPEED_GAIN,
+            Self::DEFAULT_PANEL_WIDTH_MM,
+            Self::DEFAULT_PANEL_HEIGHT_MM,
+        )
     }
 }
 

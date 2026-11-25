@@ -24,6 +24,7 @@ objc2-core-graphics = "0.3"
 objc2-app-kit = "0.3"
 objc2-application-services = "0.3"
 objc2-io-kit = "0.3"
+objc2-service-management = "0.3"
 mach2 = "0.7"
 
 serde = { version = "1", features = ["derive"] }
