@@ -209,14 +209,10 @@ pub struct GestureConfig {
     /// The panel's active area, set by the pipeline from the panel profile; thresholds are in mm.
     pub panel_width_mm: f64,
     pub panel_height_mm: f64,
-    /// Travel that still counts as a stationary finger: taps and long-presses are decided inside
-    /// this radius (touch slop), so settling wobble on glass doesn't turn a hold into a drag.
-    /// Classification of a scroll or drag needs travel beyond it.
+    /// Travel from where the finger landed that still counts as a stationary finger, however
+    /// long it is down: taps and long-presses are decided inside this radius (touch slop), so a
+    /// tap can wobble. A scroll or a drag is one as soon as the finger is beyond it.
     pub hold_slop_mm: f64,
-    /// From 150 ms until the long-press time, the stationary radius grows with hold time at this
-    /// rate: a finger planted to right-click has room to settle, and is given 16.75 mm by then.
-    /// It stops there. Growing any longer, a drag at or below this rate never classified.
-    pub hold_drift_mm_per_s: f64,
     pub double_tap_radius_mm: f64,
     pub double_tap_interval_ns: u64,
     pub long_press_ns: u64,
@@ -274,7 +270,6 @@ impl Default for GestureConfig {
             panel_width_mm: 309.3,
             panel_height_mm: 173.9,
             hold_slop_mm: 8.0,
-            hold_drift_mm_per_s: 25.0,
             double_tap_radius_mm: 8.0,
             double_tap_interval_ns: 500_000_000,
             long_press_ns: 500_000_000,
@@ -293,9 +288,6 @@ impl Default for GestureConfig {
         }
     }
 }
-
-/// How long a touch is judged by the tap slop alone, before the hold's drift tolerance grows.
-const TAP_SLOP_FLAT_NS: u64 = 150_000_000;
 
 /// What a held press resumes as, after a flapped contact returns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -475,7 +467,7 @@ impl GestureRecognizer {
         self.two_finger_moved = false;
         self.three_finger_moved = false;
         self.multi_finger_moved = false;
-        for event in events {
+        for (index, event) in events.iter().enumerate() {
             let point = PanelPoint::new(event.x, event.y);
             match event.phase {
                 ContactPhase::Began | ContactPhase::Moved => {
@@ -495,7 +487,13 @@ impl GestureRecognizer {
                 actions.extend(self.cancel(at_ns));
                 continue;
             }
-            actions.extend(self.step(event, point, at_ns));
+            // A report's last word on a finger is where the finger is. An earlier place in the same
+            // report is where the tracker took it to have been a frame or two before, on a chain it
+            // had held, or the panel's own place after a tap: after a tap at (122.5, 85.2) mm on
+            // 2026-11-26 one report passed on places 8 mm to the left, ending 7.5 mm away, and the
+            // next 12 mm to the right, ending 6 mm away. Judged on those, the tap had left the slop.
+            let moved_on = events[index + 1..].iter().any(|later| later.id == event.id && later.phase != ContactPhase::Ended);
+            actions.extend(self.step(event, point, at_ns, moved_on));
             if self.active.is_empty() && matches!(self.state, State::Ignoring) {
                 self.state = State::Idle;
             }
@@ -539,17 +537,6 @@ impl GestureRecognizer {
         }
     }
 
-    /// How far from where it landed a finger may be `held_ns` into the touch and still count as
-    /// stationary: the tap slop for the first 150 ms, so a deliberate swipe classifies at once;
-    /// growing with hold time until the long-press time, so a finger planted to right-click has
-    /// room to settle; and no wider after that, so a slow drag, which keeps travelling, leaves it.
-    fn stationary_radius_mm(&self, held_ns: u64) -> f64 {
-        let growing_ns = held_ns
-            .saturating_sub(TAP_SLOP_FLAT_NS)
-            .min(self.config.long_press_ns.saturating_sub(TAP_SLOP_FLAT_NS));
-        self.config.hold_slop_mm + growing_ns as f64 / 1e9 * self.config.hold_drift_mm_per_s
-    }
-
     /// More fingers than a one-, two- or three-finger gesture allows; four or five may form a
     /// dock swipe.
     fn contact_limit(&self) -> usize {
@@ -559,7 +546,8 @@ impl GestureRecognizer {
         }
     }
 
-    fn step(&mut self, event: &ContactEvent, point: PanelPoint, now: u64) -> SmallVec<[GestureAction; 8]> {
+    /// `moved_on`: the same report says more of where this contact went (`handle` says why).
+    fn step(&mut self, event: &ContactEvent, point: PanelPoint, now: u64, moved_on: bool) -> SmallVec<[GestureAction; 8]> {
         // The old state is taken out so arms can replace it freely; every arm either assigns the
         // successor or puts the old state back.
         match std::mem::replace(&mut self.state, State::Ignoring) {
@@ -632,23 +620,24 @@ impl GestureRecognizer {
                     });
                     return smallvec![];
                 }
-                let held_ns = now.saturating_sub(down_ns);
                 let travel_mm = distance_mm(&self.config, point, origin);
-                // Past the tap slop, a finger that landed on a window's drag area is dragging that
-                // window, however slowly: the growing radius is for a finger held to right-click.
-                let window_drag = travel_mm > self.config.hold_slop_mm
-                    && self.drag_zone.as_ref().is_some_and(|zone| zone(origin));
+                let on_drag_area = self.drag_zone.as_ref().is_some_and(|zone| zone(origin));
                 match event.phase {
-                    ContactPhase::Moved
-                        if window_drag || travel_mm > self.stationary_radius_mm(held_ns) =>
-                    {
+                    // The slop is the same however long the finger has been down. It grew with that
+                    // time, at 25 mm/s to 16.75 mm, so that a finger planted to right-click had
+                    // room to settle: a drag no faster than that was "stationary", and its lift
+                    // after half a second a right-click. The owner's slow drags are made at about
+                    // that speed (land, wait 150 to 350 ms, move, lift); on 2026-11-25 and
+                    // 2026-11-26 one each travelled 10 mm and 12 mm in about a second, and
+                    // right-clicked.
+                    ContactPhase::Moved if !moved_on && travel_mm > self.config.hold_slop_mm => {
                         // A click-and-drag needs a still finger first: the linger before the first
                         // real movement separates hold-drag from a slow natural swipe, which scrolls.
                         let first_move = first_move_ns.unwrap_or(now);
                         let hold = first_move - down_ns >= self.config.long_press_ns;
                         if !hold
                             && self.config.one_finger_drag == OneFingerDragMode::Scroll
-                            && !window_drag
+                            && !on_drag_area
                         {
                             self.state =
                                 State::Panning { id, last: point, samples: smallvec![(down_ns, origin), (now, point)] };
@@ -661,7 +650,7 @@ impl GestureRecognizer {
                         // A window drag is pressed where the finger is by now, for as long as that
                         // is still a drag area: the drag is recognised only after some travel, and
                         // the window would jump that far to catch up with the finger.
-                        let at = if window_drag && self.drag_zone.as_ref().is_some_and(|zone| zone(point)) {
+                        let at = if on_drag_area && self.drag_zone.as_ref().is_some_and(|zone| zone(point)) {
                             point
                         } else {
                             origin
@@ -1880,31 +1869,57 @@ mod tests {
     }
 
     #[test]
-    fn the_stationary_radius_grows_to_the_long_press_time_and_no_further() {
-        let recognizer = GestureRecognizer::new(GestureConfig::default());
-        let radius = |ms| recognizer.stationary_radius_mm(ms * MS);
-        assert_eq!(radius(0), 8.0);
-        assert_eq!(radius(150), 8.0);
-        assert!((radius(325) - 12.375).abs() < 1e-9);
-        assert!((radius(500) - 16.75).abs() < 1e-9);
-        assert!((radius(5_000) - 16.75).abs() < 1e-9);
+    fn in_scroll_mode_a_slow_drag_on_a_title_bar_moves_the_window() {
+        let mut s = Script::in_mode(OneFingerDragMode::Scroll);
+        s.recognizer.drag_zone = Some(Box::new(|_| true));
+        s.at(0, &[began(0, 0.3, 0.3)]);
+        let finger = PanelPoint::new(0.3 + mm_x(9.0), 0.3);
+        s.at(400, &[moved(0, finger.x, finger.y)]);
+        assert_eq!(s.actions, [GestureAction::DragBegan { at: finger, hold: false }]);
+        s.at(600, &[ended(0, finger.x, finger.y)]);
+        assert_eq!(s.actions.last(), Some(&GestureAction::DragEnded { at: finger }));
     }
 
-    /// A swipe at 10 mm/s from the moment it lands: 17 mm after 1.7 s. The radius used to grow at
-    /// 25 mm/s for as long as the finger was down, so this never classified, and the lift after
-    /// half a second was a right-click.
+    fn is_scroll_began(action: Option<&GestureAction>, dx: f64, dy: f64) -> bool {
+        matches!(action, Some(GestureAction::Scroll { dx: a, dy: b, phase: GesturePhase::Began }) if (a - dx).abs() < 1e-9 && (b - dy).abs() < 1e-9)
+    }
+
+    /// A swipe at 10 mm/s from the moment it lands. The slop used to grow with the time the finger
+    /// was down: at 25 mm/s for as long as that lasted, so that this never classified and the lift
+    /// after half a second was a right-click; then up to 16.75 mm, so that it scrolled after 1.7 s.
     #[test]
-    fn a_slow_swipe_scrolls_once_it_leaves_the_stationary_radius() {
+    fn a_slow_swipe_scrolls_once_it_leaves_the_tap_slop() {
         let mut s = Script::in_mode(OneFingerDragMode::Scroll);
         s.at(0, &[began(0, 0.5, 0.5)]);
-        for step in 1u64..=16 {
+        for step in 1u64..=7 {
             s.at(100 * step, &[moved(0, 0.5, 0.5 + mm_y(step as f64))]);
         }
-        assert!(s.actions.is_empty(), "16 mm is still inside the radius");
-        s.at(1_700, &[moved(0, 0.5, 0.5 + mm_y(17.0))]);
-        assert_eq!(s.actions.first(), Some(&GestureAction::Scroll { dx: 0.0, dy: mm_y(17.0), phase: GesturePhase::Began }));
-        s.at(1_800, &[ended(0, 0.5, 0.5 + mm_y(17.0))]);
+        assert!(s.actions.is_empty(), "inside the slop nothing is decided");
+        s.at(900, &[moved(0, 0.5, 0.5 + mm_y(9.0))]);
+        assert!(is_scroll_began(s.actions.first(), 0.0, mm_y(9.0)), "{:?}", s.actions);
+        s.at(1_800, &[ended(0, 0.5, 0.5 + mm_y(9.0))]);
         assert!(matches!(s.actions.last(), Some(GestureAction::ScrollEnded { .. })), "a swipe that scrolled does not right-click on lift: {:?}", s.actions);
+    }
+
+    // Owner, 2026-11-26, 18:16: a nudge to scroll a line or two in a terminal. The finger landed,
+    // waited 177 ms, moved 5.5 mm in 70 ms and 6 mm more at 25 mm/s, rested 300 ms and lifted at
+    // 913 ms. The slop had grown to 15.6 mm by 455 ms: nothing scrolled, and the lift was a
+    // right-click.
+    #[test]
+    fn a_slow_nudge_scrolls_and_is_no_right_click() {
+        let mut s = Script::in_mode(OneFingerDragMode::Scroll);
+        s.at(0, &[began(0, 0.4, 0.4)]);
+        s.at(247, &[moved(0, 0.4 - mm_x(0.9), 0.4 + mm_y(5.2))]);
+        s.at(298, &[moved(0, 0.4 - mm_x(1.1), 0.4 + mm_y(6.0))]);
+        assert!(s.actions.is_empty(), "inside the slop nothing is decided: {:?}", s.actions);
+        s.at(455, &[moved(0, 0.4 - mm_x(2.0), 0.4 + mm_y(8.0))]);
+        assert!(is_scroll_began(s.actions.first(), -mm_x(2.0), mm_y(8.0)), "{:?}", s.actions);
+        let rest = PanelPoint::new(0.4 - mm_x(2.2), 0.4 + mm_y(11.5));
+        s.at(545, &[moved(0, rest.x, rest.y)]);
+        assert!(matches!(s.actions.last(), Some(GestureAction::Scroll { phase: GesturePhase::Changed, .. })), "{:?}", s.actions);
+        s.at(913, &[ended(0, rest.x, rest.y)]);
+        assert!(matches!(s.actions.last(), Some(GestureAction::ScrollEnded { .. })), "{:?}", s.actions);
+        assert_eq!(s.actions.len(), 3, "a nudge that scrolled is no click: {:?}", s.actions);
     }
 
     // Drift of 2.5 mm in the first 100 ms, then clear travel at 600 ms: a swipe, classified by
@@ -1919,23 +1934,10 @@ mod tests {
         assert_eq!(actions.first(), Some(&GestureAction::Scroll { dx: 0.09375, dy: 0.0, phase: GesturePhase::Began }));
     }
 
-    /// The other side of the cap: a finger planted to right-click keeps 16.75 mm to settle in,
-    /// however long it is held.
-    #[test]
-    fn a_planted_finger_keeps_its_drift_tolerance_however_long_it_is_held() {
-        let mut s = Script::new();
-        s.at(0, &[began(0, 0.4, 0.4)]);
-        s.at(500, &[moved(0, 0.4 + mm_x(8.0), 0.4)]);
-        s.at(3_000, &[moved(0, 0.4 + mm_x(16.0), 0.4)]);
-        assert!(s.actions.is_empty(), "slow drift stays a stationary hold: {:?}", s.actions);
-        s.at(3_500, &[ended(0, 0.4 + mm_x(16.0), 0.4)]);
-        assert_eq!(s.actions, [GestureAction::RightClick { at: PanelPoint::new(0.4 + mm_x(16.0), 0.4) }]);
-    }
-
-    /// Past that, travel is travel: 20 mm after a second is a click-and-drag from where the
+    /// Past the slop, travel is travel: 20 mm after a second is a click-and-drag from where the
     /// finger landed.
     #[test]
-    fn a_finger_that_travels_past_the_tolerance_after_a_hold_drags() {
+    fn a_finger_that_travels_past_the_tap_slop_after_a_hold_drags() {
         let mut s = Script::new();
         s.at(0, &[began(0, 0.4, 0.4)]);
         s.at(1_000, &[moved(0, 0.4 + mm_x(20.0), 0.4)]);
@@ -1946,6 +1948,39 @@ mod tests {
                 GestureAction::DragMoved { to: PanelPoint::new(0.4 + mm_x(20.0), 0.4) },
             ]
         );
+    }
+
+    // The other side of the slop. Taps slide as the tracker sees them: on the title bar row of
+    // 2026-11-25 the panel put a tap's finger 23 pt (5.3 mm) from where it had landed.
+    #[test]
+    fn a_tap_that_slides_inside_the_slop_is_a_tap() {
+        let mut s = Script::in_mode(OneFingerDragMode::Scroll);
+        s.at(0, &[began(0, 0.5, 0.5)]);
+        s.at(40, &[moved(0, 0.5 + mm_x(5.3), 0.5)]);
+        assert!(s.actions.is_empty(), "{:?}", s.actions);
+        s.at(120, &[ended(0, 0.5 + mm_x(5.3), 0.5)]);
+        assert_eq!(s.actions, [GestureAction::Tap { at: PanelPoint::new(0.5 + mm_x(5.3), 0.5), count: 1 }]);
+    }
+
+    // Owner's recording 2026-11-26, 10.917 s: a tap of 233 ms at (122.5, 85.2) mm, after which the
+    // panel went on reporting other places on the finger's row. The tracker passed two of them on,
+    // each as one report of several places: 8 mm to the left, ending 7.5 mm away, and 12 mm to the
+    // right, ending 6 mm away. Judged on every place in a report, the tap had left the slop.
+    #[test]
+    fn a_tap_the_panel_chatters_after_stays_a_tap() {
+        let mut s = Script::in_mode(OneFingerDragMode::Scroll);
+        let at = |dx: f64, dy: f64| PanelPoint::new(0.4 + mm_x(dx), 0.4 + mm_y(dy));
+        s.at(0, &[began(0, at(0.0, 0.0).x, at(0.0, 0.0).y)]);
+        s.at(282, &[moved(0, at(-8.1, 0.3).x, at(-8.1, 0.3).y), moved(0, at(-7.5, 0.0).x, at(-7.5, 0.0).y)]);
+        assert!(s.actions.is_empty(), "{:?}", s.actions);
+        s.at(369, &[
+            moved(0, at(12.4, 0.0).x, at(12.4, 0.0).y),
+            moved(0, at(8.7, -1.0).x, at(8.7, -1.0).y),
+            moved(0, at(-5.5, -1.5).x, at(-5.5, -1.5).y),
+        ]);
+        assert!(s.actions.is_empty(), "{:?}", s.actions);
+        s.at(493, &[ended(0, at(-2.3, -4.4).x, at(-2.3, -4.4).y)]);
+        assert_eq!(s.actions, [GestureAction::Tap { at: at(-2.3, -4.4), count: 1 }]);
     }
 
     #[test]
@@ -2490,17 +2525,18 @@ mod tests {
 
     // Long-press with drift
 
+    /// A finger held to right-click may wander inside the slop, however long it is held; past it,
+    /// travel is travel. The slop used to grow to 16.75 mm with the time the finger was down, and
+    /// a finger that had moved 12 mm was right-clicked there.
     #[test]
-    fn a_long_press_that_drifts_slowly_still_right_clicks() {
+    fn a_long_press_may_wander_inside_the_slop() {
         let mut s = Script::new();
         s.at(0, &[began(0, 0.4, 0.4)]);
-        // 4 mm of drift per 400 ms: 10 mm/s, exactly the tolerated rate, for a full second.
-        s.at(400, &[moved(0, 0.4 + mm_x(4.0), 0.4)]);
-        s.at(800, &[moved(0, 0.4 + mm_x(8.0), 0.4)]);
-        s.at(1200, &[moved(0, 0.4 + mm_x(12.0), 0.4)]);
-        assert!(s.actions.is_empty(), "slow drift stays a stationary hold");
-        s.at(1250, &[ended(0, 0.4 + mm_x(12.0), 0.4)]);
-        assert_eq!(s.actions, [GestureAction::RightClick { at: PanelPoint::new(0.4 + mm_x(12.0), 0.4) }]);
+        s.at(300, &[moved(0, 0.4 + mm_x(6.0), 0.4)]);
+        s.at(700, &[moved(0, 0.4 + mm_x(6.5), 0.4 + mm_y(3.0))]);
+        assert!(s.actions.is_empty(), "inside the slop a held finger is still a long press: {:?}", s.actions);
+        s.at(900, &[ended(0, 0.4 + mm_x(6.5), 0.4 + mm_y(3.0))]);
+        assert_eq!(s.actions, [GestureAction::RightClick { at: PanelPoint::new(0.4 + mm_x(6.5), 0.4 + mm_y(3.0)) }]);
     }
 
     // Drag grace (off by default; the tracker bridges the panel's tip flaps)

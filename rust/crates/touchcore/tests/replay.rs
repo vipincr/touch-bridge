@@ -423,10 +423,99 @@ fn the_taps_the_panel_chatters_after_are_held_no_longer_than_a_still_finger_come
 
 #[test]
 fn no_long_press_is_recognised_where_the_owner_made_none() {
-    let replay = scrolling(ORIGIN_REPORTS);
+    for (name, source) in [("origin-reports-2026-11-26", ORIGIN_REPORTS), ("title-bar-2026-11-25", TITLE_BAR), ("nudges-2026-11-26", NUDGES)] {
+        let replay = scrolling(source);
+        assert!(
+            !replay.actions.iter().any(|(_, action)| matches!(action, GestureAction::RightClick { .. })),
+            "{name}: {}",
+            describe(&replay)
+        );
+    }
+}
+
+// nudges-2026-11-26 holds 34 s of the owner scrolling a terminal with small, slow nudges, on the
+// build of the recording above: 492 mouse reports, 484 with the tip down, in seven touches. The
+// finger landed, rested 70 to 350 ms, moved, rested again and lifted; three nudges began with 5.5
+// to 9 mm in 70 to 90 ms. In that build the slop in which a finger counted as stationary grew
+// with the time it was down, to 16.75 mm by half a second. The nudge at 25.720 s, 11.7 mm in all,
+// never left it: nothing scrolled, and the lift at 913 ms was a right-click. The one at 31.557 s
+// scrolled at 679 ms, once the finger had gone past 16 mm. Replayed, the slow drag at 24.211 s of
+// title-bar-2026-11-25 ended the same way (a replay has no window drag areas).
+
+const NUDGES: &str = include_str!("../../../../Tests/TouchCoreTests/Fixtures/nudges-2026-11-26.jsonl");
+
+/// When the first scroll from `from_ns` on began.
+fn scroll_begun(replay: &Replay, from_ns: u64) -> Option<u64> {
+    replay
+        .actions
+        .iter()
+        .find(|(at_ns, action)| *at_ns >= from_ns && matches!(action, GestureAction::Scroll { phase: GesturePhase::Began, .. }))
+        .map(|(at_ns, _)| *at_ns)
+}
+
+#[test]
+fn a_slow_nudge_scrolls_and_is_no_right_click() {
+    // 25.720 s to 26.631 s: landed, 177 ms of rest, 5.5 mm in 70 ms, 6 mm more at 25 mm/s, 300 ms
+    // of rest, lifted at 913 ms. It is a scroll from the moment it is 8 mm on, at 423 ms.
+    let replay = scrolling(NUDGES);
+    let nudge = touches(&replay, 25 * SECOND + 600_000_000, 26 * SECOND + 900_000_000);
+    assert_eq!(nudge.len(), 1, "{}", describe(&replay));
+    let begun = scroll_begun(&replay, nudge[0].began_ns).unwrap_or_else(|| panic!("the nudge did not scroll: {}", describe(&replay)));
     assert!(
-        !replay.actions.iter().any(|(_, action)| matches!(action, GestureAction::RightClick { .. })),
-        "{}",
+        begun - nudge[0].began_ns < 500_000_000,
+        "the scroll began {} ms into the nudge: {}",
+        (begun - nudge[0].began_ns) / 1_000_000,
+        describe(&replay)
+    );
+    assert!(!replay.actions.iter().any(|(_, action)| matches!(action, GestureAction::RightClick { .. })), "{}", describe(&replay));
+}
+
+#[test]
+fn a_nudge_that_begins_small_scrolls_soon() {
+    // 31.557 s to 32.467 s: landed, 175 ms of rest, 6.7 mm in 70 ms, 0.3 mm a frame for 350 ms,
+    // then 10 mm at 50 mm/s. It is 8 mm on at 298 ms; it scrolled at 679 ms.
+    let replay = scrolling(NUDGES);
+    let nudge = touches(&replay, 31 * SECOND + 400_000_000, 32 * SECOND + 600_000_000);
+    assert_eq!(nudge.len(), 1, "{}", describe(&replay));
+    let begun = scroll_begun(&replay, nudge[0].began_ns).unwrap_or_else(|| panic!("the nudge did not scroll: {}", describe(&replay)));
+    assert!(
+        begun - nudge[0].began_ns < 350_000_000,
+        "the scroll began {} ms into the nudge: {}",
+        (begun - nudge[0].began_ns) / 1_000_000,
+        describe(&replay)
+    );
+}
+
+#[test]
+fn the_nudges_are_six_scrolls_and_a_tap() {
+    let replay = scrolling(NUDGES);
+    assert_eq!(replay.contacts.len(), 7, "{}", describe(&replay));
+    let begun = balanced(replay.actions.iter().map(|(_, action)| action));
+    let of = |name: &str| begun.get(name).copied().unwrap_or(0);
+    assert_eq!((of("scroll"), of("tap"), of("rightClick"), of("drag")), (6, 1, 0, 0), "{begun:?}");
+}
+
+// long-press-2026-11-26 holds 4.3 s of the owner's use at 20:54, after the panel had been away
+// from 19:17 to 20:52: a touch the panel reported at its bottom-right corner for 405 ms, a tap at
+// the left edge, and a finger held at the left edge for 3.6 s to right-click. In its last half
+// second the finger wandered along the edge to 5.9 mm from where it had landed.
+
+const LONG_PRESS: &str = include_str!("../../../../Tests/TouchCoreTests/Fixtures/long-press-2026-11-26.jsonl");
+
+#[test]
+fn a_finger_held_to_right_click_right_clicks_however_it_wanders_inside_the_slop() {
+    let replay = scrolling(LONG_PRESS);
+    let clicks: Vec<&GestureAction> =
+        replay.actions.iter().filter(|(_, action)| matches!(action, GestureAction::RightClick { .. })).map(|(_, action)| action).collect();
+    let [GestureAction::RightClick { at }] = clicks.as_slice() else {
+        panic!("one right-click, got {clicks:?}: {}", describe(&replay));
+    };
+    // Where the finger was held: the panel's left edge, 119 mm down.
+    assert!(
+        at.x * 221.9 < 8.0 && (at.y * 147.9 - 119.4).abs() < 2.0,
+        "right-click at ({:.1}, {:.1}) mm: {}",
+        at.x * 221.9,
+        at.y * 147.9,
         describe(&replay)
     );
 }

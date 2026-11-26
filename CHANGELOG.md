@@ -10,10 +10,10 @@
   drags and the stream's repair below.
 - **Slow drags are recognised.** The radius in which a finger counts as stationary grew at 25 mm/s
   for as long as the finger was down, so a drag at or below that speed never became one: nothing
-  moved, and the lift after half a second was a right-click. The radius still grows to 16.75 mm by
-  the long-press time, which keeps a finger held to right-click room to settle, and stops there.
-  On a window's drag area (toolbar, title bar, title text) the 8 mm tap slop is the whole test,
-  however long the finger has been down.
+  moved, and the lift after half a second was a right-click. On a window's drag area (toolbar,
+  title bar, title text) the 8 mm tap slop is the whole test, however long the finger has been
+  down. Anywhere else the radius went on growing to 16.75 mm by the long-press time until the
+  evening of 2026-11-26 (see "A slow drag inside a window scrolls" below).
 - **A window drag is pressed where the finger is.** A drag is recognised only after some travel,
   and the window was pressed where the finger had landed and then moved to where it was: it jumped
   the dead travel. The press is now made where the finger is when the drag is recognised, as long
@@ -60,6 +60,23 @@
   the lift report was counted into the touch, so a tap of 233 ms followed by half a second of
   the panel's own reports was 750 ms long. Replayed, that recording makes the build before one
   long press and this one none.
+- **A slow drag inside a window scrolls.** (2026-11-26, 18:16) Anywhere but a window's drag area,
+  the radius in which a finger counted as stationary grew to 16.75 mm by half a second, so that a
+  finger held to right-click had room to settle. The owner's slow drags are made at about the rate
+  it grew at: land, wait 150 to 350 ms, move at 25 mm/s, lift. On the build of 16:01 they scrolled
+  a terminal for 34 s with small nudges (492 reports, seven touches). One travelled 11.7 mm and
+  never left the radius: nothing scrolled, and the lift at 913 ms was a right-click. Another
+  began with 6.7 mm and scrolled at 679 ms, after 16 mm. The slop is the 8 mm of a tap
+  everywhere now, however long the finger is down. The two scroll 387 ms and 266 ms after the
+  tracker began the touch, and the recording makes six scrolls and a tap. The same rule had made
+  a right-click of the slow drag on a title bar at 24.211 s of 2026-11-25 (in a replay, which has
+  no drag areas; that recording makes 8 scrolls and no long press now, 7 and one before) and a
+  click of a 10 mm drag in the multi-finger probe (18.097 s). With the slop flat, a report of the
+  panel's is judged where it leaves the finger. After the tap at 10.917 s of the 44 s recording
+  the tracker passed on two places of the panel's, in one report each: 8 mm out and 7.5 mm back,
+  then 12 mm the other way and 6 mm back. Judged on each place, that tap scrolled; it is a tap.
+  A finger held 3.6 s to right-click later that evening, at the panel's left edge, wandered 5 mm
+  along it as it lifted, and is a right-click still (long-press-2026-11-26).
 - **The drag grace is off.** The Swift build, and the port until now, held each drag's press for
   1.2 s after the lift and resumed the drag when a touch came near. The tracker now carries a
   contact through the panel's tip flaps, so a lift that reaches the recognizer is one, and the
