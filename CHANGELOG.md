@@ -77,6 +77,17 @@
   then 12 mm the other way and 6 mm back. Judged on each place, that tap scrolled; it is a tap.
   A finger held 3.6 s to right-click later that evening, at the panel's left edge, wandered 5 mm
   along it as it lifted, and is a right-click still (long-press-2026-11-26).
+- **A nudge that falls short of the slop scrolls on lift.** (2026-11-26, 21:19) On the build of
+  21:11 the owner scrolled a terminal up from its left edge, then nudged again: the finger rested
+  286 ms, crept 6.3 mm up in 280 ms and lifted at 563 ms. That is under the tap slop, so nothing
+  scrolled, and past the long-press time, so the lift was a right-click
+  (short-nudge-2026-11-26). A finger that has gone 5 mm from where it landed before the
+  long-press time, and is still down when it passes, is a nudge: its lift scrolls by how far it
+  went (on a window's drag area it is a click where the finger stopped). A finger held to
+  right-click stays inside those 5 mm until then: of the owner's five long presses that day the
+  farthest any had gone by half a second was 3.8 mm, one went 5.9 mm after 3.6 s, and all five
+  right-click. A flick under 8 mm lifted inside half a second is a click where the finger
+  stopped, as before.
 - **The drag grace is off.** The Swift build, and the port until now, held each drag's press for
   1.2 s after the lift and resumed the drag when a touch came near. The tracker now carries a
   contact through the panel's tip flaps, so a lift that reaches the recognizer is one, and the

@@ -423,7 +423,12 @@ fn the_taps_the_panel_chatters_after_are_held_no_longer_than_a_still_finger_come
 
 #[test]
 fn no_long_press_is_recognised_where_the_owner_made_none() {
-    for (name, source) in [("origin-reports-2026-11-26", ORIGIN_REPORTS), ("title-bar-2026-11-25", TITLE_BAR), ("nudges-2026-11-26", NUDGES)] {
+    for (name, source) in [
+        ("origin-reports-2026-11-26", ORIGIN_REPORTS),
+        ("title-bar-2026-11-25", TITLE_BAR),
+        ("nudges-2026-11-26", NUDGES),
+        ("short-nudge-2026-11-26", SHORT_NUDGE),
+    ] {
         let replay = scrolling(source);
         assert!(
             !replay.actions.iter().any(|(_, action)| matches!(action, GestureAction::RightClick { .. })),
@@ -501,6 +506,37 @@ fn the_nudges_are_six_scrolls_and_a_tap() {
 // second the finger wandered along the edge to 5.9 mm from where it had landed.
 
 const LONG_PRESS: &str = include_str!("../../../../Tests/TouchCoreTests/Fixtures/long-press-2026-11-26.jsonl");
+
+// short-nudge-2026-11-26 holds 7 s of the owner's use at 21:19, on the build of 21:11: a scroll up
+// a terminal from its left edge, a tap, the nudge below, and then the panel's storm along a row.
+// The nudge's finger rested 286 ms, crept 6.3 mm up in 280 ms and lifted at 563 ms: under the tap
+// slop and past the long-press time, and on that build a right-click.
+
+const SHORT_NUDGE: &str = include_str!("../../../../Tests/TouchCoreTests/Fixtures/short-nudge-2026-11-26.jsonl");
+
+#[test]
+fn a_short_nudge_scrolls_on_lift() {
+    let replay = scrolling(SHORT_NUDGE);
+    let nudge = touches(&replay, SECOND + 400_000_000, SECOND + 500_000_000);
+    assert_eq!(nudge.len(), 1, "{}", describe(&replay));
+    assert!(nudge[0].ended_ns - nudge[0].began_ns >= 500_000_000, "{}", describe(&replay));
+    let begun = scroll_begun(&replay, nudge[0].began_ns).unwrap_or_else(|| panic!("the nudge did not scroll: {}", describe(&replay)));
+    assert!(
+        begun.abs_diff(nudge[0].ended_ns) < 1_000_000,
+        "the scroll began at {} s and the nudge ended at {} s: {}",
+        begun as f64 / 1e9,
+        nudge[0].ended_ns as f64 / 1e9,
+        describe(&replay)
+    );
+    assert!(
+        !replay.actions.iter().any(|(_, action)| matches!(action, GestureAction::RightClick { .. })),
+        "{}",
+        describe(&replay)
+    );
+    assert_eq!(replay.contacts.len(), 11, "{}", describe(&replay));
+    let of = |name: &str| balanced(replay.actions.iter().map(|(_, action)| action)).get(name).copied().unwrap_or(0);
+    assert_eq!((of("scroll"), of("tap"), of("rightClick"), of("drag")), (3, 8, 0, 0));
+}
 
 #[test]
 fn a_finger_held_to_right_click_right_clicks_however_it_wanders_inside_the_slop() {

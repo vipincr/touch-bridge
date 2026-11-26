@@ -213,6 +213,11 @@ pub struct GestureConfig {
     /// long it is down: taps and long-presses are decided inside this radius (touch slop), so a
     /// tap can wobble. A scroll or a drag is one as soon as the finger is beyond it.
     pub hold_slop_mm: f64,
+    /// How far from where it landed a finger gets before the long-press time when it is not
+    /// holding to right-click. Still inside the tap slop when the long-press time passes, such a
+    /// finger is a nudge that fell short: its lift scrolls by how far it went, where it used to
+    /// right-click.
+    pub nudge_slop_mm: f64,
     pub double_tap_radius_mm: f64,
     pub double_tap_interval_ns: u64,
     pub long_press_ns: u64,
@@ -270,6 +275,7 @@ impl Default for GestureConfig {
             panel_width_mm: 309.3,
             panel_height_mm: 173.9,
             hold_slop_mm: 8.0,
+            nudge_slop_mm: 5.0,
             double_tap_radius_mm: 8.0,
             double_tap_interval_ns: 500_000_000,
             long_press_ns: 500_000_000,
@@ -367,6 +373,8 @@ enum State {
         origin: PanelPoint,
         current: PanelPoint,
         first_move_ns: Option<u64>,
+        /// When the finger first was `nudge_slop_mm` from where it landed, if it has been.
+        nudged_ns: Option<u64>,
     },
     Dragging {
         id: u8,
@@ -546,6 +554,41 @@ impl GestureRecognizer {
         }
     }
 
+    /// A finger has left the slop: a scroll, or a drag pressed where the window needs it. One
+    /// that was still for the long-press time before it moved drags with the button held (a
+    /// click-and-drag); one that moved at once was a swipe, which scrolls.
+    fn begin_drag(
+        &mut self,
+        id: u8,
+        down_ns: u64,
+        origin: PanelPoint,
+        point: PanelPoint,
+        first_move_ns: Option<u64>,
+        now: u64,
+    ) -> SmallVec<[GestureAction; 8]> {
+        let first_move = first_move_ns.unwrap_or(now);
+        let hold = first_move - down_ns >= self.config.long_press_ns;
+        let on_drag_area = self.drag_zone.as_ref().is_some_and(|zone| zone(origin));
+        if !hold && self.config.one_finger_drag == OneFingerDragMode::Scroll && !on_drag_area {
+            self.state = State::Panning { id, last: point, samples: smallvec![(down_ns, origin), (now, point)] };
+            return smallvec![GestureAction::Scroll {
+                dx: point.x - origin.x,
+                dy: point.y - origin.y,
+                phase: GesturePhase::Began,
+            }];
+        }
+        // A window drag is pressed where the finger is by now, for as long as that is still a drag
+        // area: the drag is recognised only after some travel, and the window would jump that far
+        // to catch up with the finger.
+        let at = if on_drag_area && self.drag_zone.as_ref().is_some_and(|zone| zone(point)) { point } else { origin };
+        self.state = State::Dragging { id, last: point, samples: smallvec![(down_ns, origin), (now, point)] };
+        let mut actions = smallvec![GestureAction::DragBegan { at, hold }];
+        if point != at {
+            actions.push(GestureAction::DragMoved { to: point });
+        }
+        actions
+    }
+
     /// `moved_on`: the same report says more of where this contact went (`handle` says why).
     fn step(&mut self, event: &ContactEvent, point: PanelPoint, now: u64, moved_on: bool) -> SmallVec<[GestureAction; 8]> {
         // The old state is taken out so arms can replace it freely; every arm either assigns the
@@ -559,6 +602,7 @@ impl GestureRecognizer {
                         origin: point,
                         current: point,
                         first_move_ns: None,
+                        nudged_ns: None,
                     };
                     self.resting_extras.clear();
                 } else {
@@ -567,7 +611,7 @@ impl GestureRecognizer {
                 smallvec![]
             }
 
-            State::OneFinger { id, down_ns, origin, current, first_move_ns } => {
+            State::OneFinger { id, down_ns, origin, current, first_move_ns, nudged_ns } => {
                 if event.id != id {
                     // The first finger is still (it would have left this state after moving past
                     // the tap slop).
@@ -583,20 +627,20 @@ impl GestureRecognizer {
                                 && now - down_ns <= self.config.resting_drag_window_ns =>
                         {
                             self.resting_extras.insert(event.id, point);
-                            self.state = State::OneFinger { id, down_ns, origin, current, first_move_ns };
+                            self.state = State::OneFinger { id, down_ns, origin, current, first_move_ns, nudged_ns };
                         }
                         ContactPhase::Moved if self.resting_extras.contains_key(&event.id) => {
                             self.resting_extras.insert(event.id, point);
-                            self.state = State::OneFinger { id, down_ns, origin, current, first_move_ns };
+                            self.state = State::OneFinger { id, down_ns, origin, current, first_move_ns, nudged_ns };
                         }
                         ContactPhase::Ended => {
                             self.resting_extras.remove(&event.id);
-                            self.state = State::OneFinger { id, down_ns, origin, current, first_move_ns };
+                            self.state = State::OneFinger { id, down_ns, origin, current, first_move_ns, nudged_ns };
                             return smallvec![];
                         }
                         _ => {
                             // One late finger alone is ignored, as before.
-                            self.state = State::OneFinger { id, down_ns, origin, current, first_move_ns };
+                            self.state = State::OneFinger { id, down_ns, origin, current, first_move_ns, nudged_ns };
                             return smallvec![];
                         }
                     }
@@ -621,7 +665,6 @@ impl GestureRecognizer {
                     return smallvec![];
                 }
                 let travel_mm = distance_mm(&self.config, point, origin);
-                let on_drag_area = self.drag_zone.as_ref().is_some_and(|zone| zone(origin));
                 match event.phase {
                     // The slop is the same however long the finger has been down. It grew with that
                     // time, at 25 mm/s to 16.75 mm, so that a finger planted to right-click had
@@ -631,43 +674,22 @@ impl GestureRecognizer {
                     // 2026-11-26 one each travelled 10 mm and 12 mm in about a second, and
                     // right-clicked.
                     ContactPhase::Moved if !moved_on && travel_mm > self.config.hold_slop_mm => {
-                        // A click-and-drag needs a still finger first: the linger before the first
-                        // real movement separates hold-drag from a slow natural swipe, which scrolls.
-                        let first_move = first_move_ns.unwrap_or(now);
-                        let hold = first_move - down_ns >= self.config.long_press_ns;
-                        if !hold
-                            && self.config.one_finger_drag == OneFingerDragMode::Scroll
-                            && !on_drag_area
-                        {
-                            self.state =
-                                State::Panning { id, last: point, samples: smallvec![(down_ns, origin), (now, point)] };
-                            return smallvec![GestureAction::Scroll {
-                                dx: point.x - origin.x,
-                                dy: point.y - origin.y,
-                                phase: GesturePhase::Began,
-                            }];
-                        }
-                        // A window drag is pressed where the finger is by now, for as long as that
-                        // is still a drag area: the drag is recognised only after some travel, and
-                        // the window would jump that far to catch up with the finger.
-                        let at = if on_drag_area && self.drag_zone.as_ref().is_some_and(|zone| zone(point)) {
-                            point
-                        } else {
-                            origin
-                        };
-                        self.state =
-                            State::Dragging { id, last: point, samples: smallvec![(down_ns, origin), (now, point)] };
-                        let mut actions = smallvec![GestureAction::DragBegan { at, hold }];
-                        if point != at {
-                            actions.push(GestureAction::DragMoved { to: point });
-                        }
-                        actions
+                        self.begin_drag(id, down_ns, origin, point, first_move_ns, now)
                     }
                     ContactPhase::Moved | ContactPhase::Began => {
                         let first_move =
                             first_move_ns.or_else(|| if distance_mm(&self.config, point, origin) > 1.0 { Some(now) } else { None });
-                        self.state =
-                            State::OneFinger { id, down_ns, origin, current: point, first_move_ns: first_move };
+                        // Where a report leaves the finger is where it is (`handle`).
+                        let nudged =
+                            nudged_ns.or_else(|| (!moved_on && travel_mm >= self.config.nudge_slop_mm).then_some(now));
+                        self.state = State::OneFinger {
+                            id,
+                            down_ns,
+                            origin,
+                            current: point,
+                            first_move_ns: first_move,
+                            nudged_ns: nudged,
+                        };
                         smallvec![]
                     }
                     ContactPhase::Ended => {
@@ -678,10 +700,21 @@ impl GestureRecognizer {
                         // chatters, and that time is no finger's (owner's recording 2026-11-26,
                         // 10.954 s: a tap of 233 ms, so held, was a long press).
                         self.state = if self.active.is_empty() { State::Idle } else { State::Ignoring };
-                        if event.at_ns.saturating_sub(down_ns) >= self.config.long_press_ns {
-                            smallvec![GestureAction::RightClick { at: point }]
-                        } else {
+                        let nudged_early = nudged_ns.is_some_and(|at| at.saturating_sub(down_ns) < self.config.long_press_ns);
+                        if event.at_ns.saturating_sub(down_ns) < self.config.long_press_ns {
                             smallvec![self.tap(point, event.at_ns)]
+                        } else if nudged_early {
+                            // A nudge that fell short of the tap slop, still down at the long-press
+                            // time. Its lift was a right-click: on 2026-11-26, at 21:19, the owner's
+                            // finger rested 286 ms, crept 6.3 mm up a terminal in 280 ms and lifted
+                            // at 563 ms, just after a scroll of much the same size. A finger held to
+                            // right-click gets that far later, or never: of five that day, the
+                            // farthest any had gone by half a second was 3.8 mm.
+                            let mut actions = self.begin_drag(id, down_ns, origin, point, first_move_ns, now);
+                            actions.extend(self.step(event, point, now, moved_on));
+                            actions
+                        } else {
+                            smallvec![GestureAction::RightClick { at: point }]
                         }
                     }
                 }
@@ -817,6 +850,7 @@ impl GestureRecognizer {
                                 origin: point,
                                 current: point,
                                 first_move_ns: None,
+                                nudged_ns: None,
                             }
                         };
                         smallvec![action]
@@ -2525,18 +2559,50 @@ mod tests {
 
     // Long-press with drift
 
-    /// A finger held to right-click may wander inside the slop, however long it is held; past it,
-    /// travel is travel. The slop used to grow to 16.75 mm with the time the finger was down, and
-    /// a finger that had moved 12 mm was right-clicked there.
+    /// A finger held to right-click may wander inside the slop, however long it is held, as long
+    /// as it is inside the nudge slop when the long-press time passes. The owner's, at the panel's
+    /// edge on 2026-11-26, had crept 3.8 mm by half a second and lifted at 509 ms; another, held
+    /// 3.6 s first, went 5.9 mm. Before 2026-11-26 the slop used to grow to 16.75 mm with the time
+    /// the finger was down.
     #[test]
-    fn a_long_press_may_wander_inside_the_slop() {
+    fn a_long_press_may_wander_late_inside_the_slop() {
         let mut s = Script::new();
         s.at(0, &[began(0, 0.4, 0.4)]);
-        s.at(300, &[moved(0, 0.4 + mm_x(6.0), 0.4)]);
-        s.at(700, &[moved(0, 0.4 + mm_x(6.5), 0.4 + mm_y(3.0))]);
+        s.at(300, &[moved(0, 0.4 + mm_x(3.8), 0.4)]);
+        s.at(900, &[moved(0, 0.4 + mm_x(6.5), 0.4 + mm_y(3.0))]);
         assert!(s.actions.is_empty(), "inside the slop a held finger is still a long press: {:?}", s.actions);
-        s.at(900, &[ended(0, 0.4 + mm_x(6.5), 0.4 + mm_y(3.0))]);
+        s.at(1_000, &[ended(0, 0.4 + mm_x(6.5), 0.4 + mm_y(3.0))]);
         assert_eq!(s.actions, [GestureAction::RightClick { at: PanelPoint::new(0.4 + mm_x(6.5), 0.4 + mm_y(3.0)) }]);
+    }
+
+    // Owner, 2026-11-26, 21:19:33, on the build that made it a right-click. After a scroll up a
+    // terminal the finger rested 286 ms, crept 6.3 mm up in 280 ms and lifted at 563 ms: under
+    // the tap slop, and past the long-press time.
+    #[test]
+    fn a_slow_nudge_that_falls_short_of_the_tap_slop_scrolls_on_lift() {
+        let mut s = Script::in_mode(OneFingerDragMode::Scroll);
+        s.at(0, &[began(0, 0.4, 0.4)]);
+        s.at(286, &[moved(0, 0.4 + mm_x(0.3), 0.4 - mm_y(0.8))]);
+        s.at(474, &[moved(0, 0.4 + mm_x(0.4), 0.4 - mm_y(5.2))]);
+        let rest = PanelPoint::new(0.4 + mm_x(0.3), 0.4 - mm_y(6.3));
+        s.at(563, &[moved(0, rest.x, rest.y)]);
+        assert!(s.actions.is_empty(), "inside the tap slop nothing is decided: {:?}", s.actions);
+        s.at(598, &[ended(0, rest.x, rest.y)]);
+        assert!(is_scroll_began(s.actions.first(), mm_x(0.3), -mm_y(6.3)), "{:?}", s.actions);
+        assert!(matches!(s.actions.last(), Some(GestureAction::ScrollEnded { .. })), "{:?}", s.actions);
+        assert_eq!(s.actions.len(), 2, "a nudge that scrolled is no click: {:?}", s.actions);
+    }
+
+    #[test]
+    fn a_nudge_on_a_title_bar_is_a_click_where_the_finger_stopped() {
+        let mut s = Script::in_mode(OneFingerDragMode::Scroll);
+        s.recognizer.drag_zone = Some(Box::new(|_| true));
+        s.at(0, &[began(0, 0.3, 0.3)]);
+        let rest = PanelPoint::new(0.3 + mm_x(6.0), 0.3);
+        s.at(300, &[moved(0, rest.x, rest.y)]);
+        assert!(s.actions.is_empty(), "{:?}", s.actions);
+        s.at(700, &[ended(0, rest.x, rest.y)]);
+        assert_eq!(s.actions, [GestureAction::DragBegan { at: rest, hold: false }, GestureAction::DragEnded { at: rest }]);
     }
 
     // Drag grace (off by default; the tracker bridges the panel's tip flaps)
