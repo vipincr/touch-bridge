@@ -7,7 +7,7 @@
   `touchplatform` (macOS I/O: displays, windows, event synthesis, Direct and Warp delivery, system
   gestures, the pipeline) and `touchnext` (the menu-bar app and its diagnostics). The menu, log
   lines and command lines are those of 1.2.0, and so are the gestures and thresholds but for the
-  drags below.
+  drags and the stream's repair below.
 - **Slow drags are recognised.** The radius in which a finger counts as stationary grew at 25 mm/s
   for as long as the finger was down, so a drag at or below that speed never became one: nothing
   moved, and the lift after half a second was a right-click. The radius still grows to 16.75 mm by
@@ -18,6 +18,35 @@
   and the window was pressed where the finger had landed and then moved to where it was: it jumped
   the dead travel. The press is now made where the finger is when the drag is recognised, as long
   as that is still a drag area.
+- **The panel's reports are repaired before a touch is tracked.** In mouse mode the JN-MD-IPST105FP
+  misreports. Over three recordings (2 100 reports, 2026-11-24 and 2026-11-25): 7 frames in 100
+  with the tip down put the finger 10 to 200 mm from where it was, 6 in 100 are followed by one to
+  eight tip-off reports while the finger is still down, and around each landing and lift come one
+  to seven frames of a touch somewhere else. The port took each report as it came, as 1.2.0 did: a
+  frame far from the finger was the finger, and the recognizer's drag grace then resumed a drag
+  when a touch came near. Owner, 2026-11-25: "i dragged around this console window, when trying to
+  tap the titlebar of the telegram app, it just goes to the background". A jump filter
+  (`SingleTouchFilter`, behind the new `ContactStream`) now stands before the contact tracker. A
+  frame is believed at once only within 6 mm of where the finger was heading. Any other is held
+  until it has support: two frames that move as a finger can, three on one place, five frames on
+  their own. While the finger is down and no lift report has come, a place it could not have got
+  to is never taken for it on the panel's word alone, however long the panel keeps to it (it kept
+  to one misread for seven frames); after fifteen such frames the finger is given up for lost. A
+  new press is believed on its third frame, or on its second when its lift is reported.
+- **A lift report is held for longer, and ends the touch sooner on surer signs.** The tracker held
+  one for 60 ms at the most. It now holds it for 250 ms (measured: a finger whose tip came back
+  194 ms after its lift report) and ends the touch when the panel has then been quiet for 50 ms,
+  or at once when the report gives the panel's origin, which the panel sends once the finger is
+  gone. A tip back by then continues the press only within a finger's travel of where it was.
+- On the recording of that drag and those taps (31 s, 806 reports), the build before made 44
+  contacts, 27 taps and 11 scrolls; this one makes 22, 12 and 8. The three taps on a title bar are
+  three clicks there. Before, two of the five clicks in that time were on the desktop, 107 mm and
+  98 mm to the left of it.
+- **The drag grace is off.** The Swift build, and the port until now, held each drag's press for
+  1.2 s after the lift and resumed the drag when a touch came near. The tracker now carries a
+  contact through the panel's tip flaps, so a lift that reaches the recognizer is one, and the
+  next touch is a new gesture. With the grace on, that next touch was lost: measured on
+  2026-11-25, a tap after a drag was taken for the drag resuming, and the window moved 68 pt.
 - **A debug build keeps the raw panel reports.** Each run writes every report it is given to
   `~/Library/Logs/TouchNext/reports-<date>-<time>.log`, in the probe's format, and the log names
   the file. `--replay` runs it again, and `--replay … --frames` prints every position the
@@ -32,7 +61,8 @@
 - **Timers became deadlines.** The pipeline, the deliverer and the Dock swipe synthesizer each keep
   their state in one struct and say when it can next change; one thread sleeps until a report
   arrives or that moment passes. The Swift ran a 50 ms timer on the pipeline queue for as long as
-  the app was open.
+  the app was open. While reports come, the pipeline runs on their stamps, so a slow Accessibility
+  query between two of them no longer moves a lift.
 - **What the port leaves out:** the drag resampler (`DragResampler`, off by default in 1.2.0, with
   its tests), `GestureConfig.tapSlopMm` (declared and never read) and the pipeline's `gestureStart`
   (stored and never read).
@@ -52,7 +82,8 @@
   in either build.
 - **`--replay <recording>`** (debug build) runs a probe recording through the pipeline in dry run,
   at the speed it was recorded and with the saved menu settings, and prints every line the
-  pipeline reports to the terminal. It posts nothing and does not take the panel.
+  pipeline reports to the terminal. Each report is stamped for the moment the recording says it
+  came, so one recording plays the same every time. It posts nothing and does not take the panel.
 - **`--ax-probe --menu`** (debug build) lists the installed copy's menu as Accessibility reports
   it, status lines and check marks included. Each `--press "Title"` presses one item without
   moving the cursor and lists the menu again, so the app's menu can be driven from a script.

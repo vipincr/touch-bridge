@@ -73,7 +73,9 @@ Commercial drivers exist. TouchNext is a free, user-space alternative. Its goal 
 | Thumb and three or four fingers pinching in / spreading out | Launchpad / Show Desktop |
 | Six or more fingers | Ignored (palm rejection) |
 
-**When a drag counts as one.** A finger travels 8 mm from where it landed before a swipe scrolls or a drag drags, so that a tap can wobble. On a toolbar, title bar or title text that is the whole test, and the window is pressed where the finger is by then, as long as that is still a drag area: it starts moving without a jump. Anywhere else a finger held to right-click has room to settle. The allowance grows to 16.75 mm by 0.5 s and stops there, so a slow swipe or drag starts once it has travelled that far.
+**When a drag counts as one.** A finger travels 8 mm from where it landed before a swipe scrolls or a drag drags, so that a tap can wobble. On a toolbar, title bar or title text that is the whole test, and the window is pressed where the finger is by then, as long as that is still a drag area: it starts moving without a jump. Anywhere else a finger held to right-click has room to settle. The allowance grows to 16.75 mm by 0.5 s and stops there, so a slow swipe or drag starts once it has travelled that far. Once the finger lifts, the next touch is a new gesture.
+
+**What the panel reports around a touch.** In mouse mode the WCH panel reports one touch at a time, and it misreports. Over three recordings (2 100 reports): 7 frames in 100 with the tip down put the finger 10 to 200 mm from where it was, 6 in 100 are followed by a tip-off report while the finger is still down, and around each landing and lift come up to seven frames of a touch somewhere else. Taken as they came, these ended touches that had not ended, began ones that never happened, and passed the jumps on as the finger's: a drag broke or jumped, and the touches around a lift were clicks wherever they landed. TouchNext believes a frame at once only within 6 mm of where the finger was heading. Any other is held until it has support: two frames that move as a finger can, three on one place, five frames on their own. While the finger is down and no lift has been reported, a place it could not have got to is never taken for it on the panel's word alone, however long the panel keeps to it. A tip-off report ends the touch when the panel has then been quiet for 50 ms, or after 250 ms; a finger back by then, within a finger's travel, continues the same press. A new press counts on its third frame, or on its second when its lift is reported.
 
 **Where the system gestures appear.** Space switching, Notification Center and Launchpad open on the touch display, not on whichever screen has the cursor or the focused window:
 - **Spaces and Notification Center** appear on the display with the cursor. While they open, TouchNext briefly parks the hidden cursor on the touch display.
@@ -223,9 +225,9 @@ TouchNext lives in the menu bar as ✋. Settings are saved across restarts, exce
 ## How it works
 
 ```
-touch panel ──HID──▶ ReportParser ─▶ ContactTracker ─▶ GestureRecognizer ─▶ DeliveryPolicy ─▶ Deliverer ─▶ apps / macOS
- (seized)            (bytes→contacts) (lifecycles)      (taps, drags,       (Direct or Warp)  (synthesized
-                                                         scroll, pinch, …)                     events)
+touch panel ──HID──▶ ReportParser ─▶ ContactStream ─▶ GestureRecognizer ─▶ DeliveryPolicy ─▶ Deliverer ─▶ apps / macOS
+ (seized)            (bytes→contacts) (jump filter,    (taps, drags,       (Direct or Warp)  (synthesized
+                                      contact tracker) scroll, pinch, …)                    events)
 ```
 
 **Taking the panel.** TouchNext opens the touch panel with exclusive access (`kIOHIDOptionsTypeSeizeDevice`), so macOS stops turning touches into cursor movements. It reads the raw multitouch reports itself, parses each finger's position, and tracks contacts across frames. Panel coordinates are mapped onto the touch display's current bounds, updated live when displays are rearranged. Rotation is supported in the mapping but hasn't been tested on hardware.
@@ -337,7 +339,7 @@ Add `-g` after `open` to keep a diagnostic run in the background.
 build/TouchNext.app/Contents/MacOS/TouchNext --replay ~/Library/Logs/TouchNext/probe-x.jsonl
 ```
 
-It runs a recording (a probe's `probe-*.jsonl`, or a run's `reports-*.log`) through the pipeline in dry run, at the speed it was recorded and with the saved menu settings, and prints every line the pipeline reports: what it would have delivered, and where. Add `--frames` to print every position the recognizer was given as well, one line a frame. It posts nothing and does not take the panel.
+It runs a recording (a probe's `probe-*.jsonl`, or a run's `reports-*.log`) through the pipeline in dry run, at the speed it was recorded and with the saved menu settings, and prints every line the pipeline reports: what it would have delivered, and where. Each report is stamped for the moment the recording says it came, so one recording plays the same every time, and the same after a change is made to compare against. Add `--frames` to print every position the recognizer was given as well, one line a frame. It posts nothing and does not take the panel.
 
 ## Troubleshooting
 
@@ -354,6 +356,8 @@ It runs a recording (a probe's `probe-*.jsonl`, or a run's `reports-*.log`) thro
 **Only one finger works.** On the WCH `0x27C0:0x0859` panel that is as far as a Mac can go: see the hardware note. Replugging does not change it.
 
 **A gesture behaves differently from the trackpad.** Check "Follow Trackpad Settings" and the trackpad switches listed under it.
+
+**A drag breaks, jumps or does not start, or a tap lands where the finger wasn't.** Look first at what the panel reported around the touch (see "What the panel reports around a touch"). Install a debug build for as long as it takes, do it again, then replay the run it recorded with `--frames`: `reports-<date>-<time>.log` has every report, and the replay prints every position the recognizer was given.
 
 **One app ignores taps.**
 - Try ✋ → Delivery → Warp only (testing) to compare.
@@ -400,7 +404,7 @@ cargo test --manifest-path rust/Cargo.toml --workspace --features debug
 
 | Path | Contents |
 |---|---|
-| `rust/crates/touchcore` | Pure logic: report parser, contact tracker, coordinate mapping, gesture recognizer, delivery policy, focus and Dock logic. No system frameworks; fully unit tested. |
+| `rust/crates/touchcore` | Pure logic: report parser, jump filter, contact tracker, coordinate mapping, gesture recognizer, delivery policy, focus and Dock logic. No system frameworks; fully unit tested. |
 | `rust/crates/touchhid` | The touch panel over IOKit HID, and the clock the driver runs on |
 | `rust/crates/touchplatform` | macOS I/O: displays and windows, event synthesis, Direct and Warp delivery, system gestures, the pipeline that connects them, diagnostics |
 | `rust/crates/touchnext` | The menu-bar app: menu, saved settings, login item. With the `debug` feature also the log file, the Event Sink, the probe and the replay |
@@ -419,6 +423,8 @@ Apple's frameworks are reached through the `objc2` bindings; the tree holds no h
 
   A macOS update can break individual features; where a private call is missing, that feature turns off and the rest keeps working. This is not App Store material.
 - **One tested setup.** It's a personal project, tested on one monitor, one Mac and one macOS version.
+- **Two touches close together can count as one.** A touch that lands within 50 ms of the last tip-off report, near the last one, continues that press: a tap and a press 5 mm apart become one long press, which is a right-click. A click also cannot leave before 50 ms after the finger lifts.
+- **A fast scrub is rough.** When the finger darts back and forth, most of what the panel reports is its own, and the gesture comes out shorter and jumpier than the finger was.
 - **The cursor is borrowed briefly.** Warp delivery and some system gestures move the hidden cursor for a fraction of a second. If you're using the trackpad at that exact moment, the cursor returns to where it was before.
 
 ## Credits
