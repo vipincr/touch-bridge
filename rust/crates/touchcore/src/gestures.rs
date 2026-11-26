@@ -1,7 +1,7 @@
 //! Gesture recognition: turns contact events into taps, right clicks, drags, scrolls,
 //! magnification, rotation, the system dock swipes, the Notification Center edge swipe and
-//! drawing strokes. Ported from `TouchCore/GestureRecognizer.swift`, which stays the
-//! specification for every state, threshold and transition.
+//! drawing strokes. It began as a port of the Swift app's recognizer, which left the tree on
+//! 2026-11-26; the states, thresholds and transitions are this file's and its tests'.
 
 use std::collections::BTreeMap;
 use std::fmt;

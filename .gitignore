@@ -1,11 +1,10 @@
-.build/
 .superpowers/
 build/
 *.app
 .DS_Store
 probe-*.jsonl
-# …except the recording the replay tests use.
-!Tests/TouchCoreTests/Fixtures/probe-*.jsonl
+# …except the recordings the replay tests use.
+!rust/crates/touchcore/tests/fixtures/probe-*.jsonl
 /rust/target/
 
 # session scratch (research copies, probe analysis, plan drafts)

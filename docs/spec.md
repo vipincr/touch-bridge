@@ -2,6 +2,7 @@
 
 > Working name **TouchBridge**. UPDD (Universal Pointing Device Driver) is Touch-Base Ltd's commercial product name, so we use our own name. It can be renamed at any point.
 > Location: `~/Projects/TouchBridge`. Step 1 of execution copies this plan into it as `docs/spec.md`.
+> The Swift app this plan describes was replaced by the Rust port in `rust/` (2.0.0) and left the tree on 2026-11-26; `Sources/` is in git history up to commit `e0433f6`. The plan stays as the record of the design.
 
 ## Context
 

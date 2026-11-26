@@ -114,7 +114,7 @@ fn mission_control_window(entry: &CFDictionary<CFString, CFType>) -> bool {
 }
 
 /// Waits `ms`, calling [`DockSwipe::tick`] about every 10 ms so the re-sends of a finished swipe
-/// leave on time, as the Swift tests' dispatch queues sent them.
+/// leave on time.
 pub fn wait(swipe: &mut DockSwipe, ms: u64) {
     let deadline = Instant::now() + Duration::from_millis(ms);
     while Instant::now() < deadline {

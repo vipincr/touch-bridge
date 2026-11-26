@@ -104,6 +104,10 @@
 - **Build with `cargo`.** `scripts/bundle.sh` runs `cargo build --release` and signs the result as
   before. A Rust toolchain (1.88 or later) replaces the Swift one, and `cargo test` replaces
   `swift test`.
+- **The Swift tree is gone** (2026-11-26). `Sources/`, `Tests/` and `Package.swift` left the tree
+  once the owner had used the port for a day; they are in git history up to `e0433f6`. The seven
+  recordings the replay tests read moved with them to
+  `rust/crates/touchcore/tests/fixtures/`. Nothing else changed: the installed build is the same.
 - **Timers became deadlines.** The pipeline, the deliverer and the Dock swipe synthesizer each keep
   their state in one struct and say when it can next change; one thread sleeps until a report
   arrives or that moment passes. The Swift ran a 50 ms timer on the pipeline queue for as long as

@@ -1,6 +1,5 @@
 //! Replays real panel recordings through the parser, the contact stream and the recognizer, fed
-//! the way the pipeline feeds them. The fixtures live once, beside the Swift tests they also
-//! serve.
+//! the way the pipeline feeds them. The recordings are in `fixtures/`, beside this file.
 
 use std::collections::BTreeMap;
 
@@ -201,7 +200,7 @@ fn balanced<'a>(actions: impl IntoIterator<Item = &'a GestureAction>) -> BTreeMa
     histogram
 }
 
-const M1_PROBE: &str = include_str!("../../../../Tests/TouchCoreTests/Fixtures/probe-session-1.jsonl");
+const M1_PROBE: &str = include_str!("fixtures/probe-session-1.jsonl");
 
 #[test]
 fn every_recorded_frame_parses() {
@@ -230,7 +229,7 @@ fn recognizer_balances_every_gesture_on_real_data() {
 // coordinates (0, 0).
 
 const MULTIFINGER_PROBE: &str =
-    include_str!("../../../../Tests/TouchCoreTests/Fixtures/probe-multifinger-2026-11-24.jsonl");
+    include_str!("fixtures/probe-multifinger-2026-11-24.jsonl");
 
 #[test]
 fn every_ended_event_sits_where_its_finger_last_was() {
@@ -257,7 +256,7 @@ fn no_tap_lands_at_the_panels_origin() {
 // window, when trying to tap the titlebar of the telegram app, it just goes to the background".
 // Taken one frame at a time, as the build before the repair did, it made 44 contacts.
 
-const TITLE_BAR: &str = include_str!("../../../../Tests/TouchCoreTests/Fixtures/title-bar-2026-11-25.jsonl");
+const TITLE_BAR: &str = include_str!("fixtures/title-bar-2026-11-25.jsonl");
 const SECOND: u64 = 1_000_000_000;
 
 /// A recording with the settings the owner's Mac had: one finger scrolls, no three-finger drag.
@@ -364,7 +363,7 @@ fn title_bar() -> Replay {
 // screen". That build let go of both drags at such a report (5.540 s and 43.445 s), and held a
 // tap's lift report for as long as the panel went on reporting after it.
 
-const ORIGIN_REPORTS: &str = include_str!("../../../../Tests/TouchCoreTests/Fixtures/origin-reports-2026-11-26.jsonl");
+const ORIGIN_REPORTS: &str = include_str!("fixtures/origin-reports-2026-11-26.jsonl");
 
 #[test]
 fn a_slow_drag_survives_ten_lift_reports_from_the_panels_origin() {
@@ -447,7 +446,7 @@ fn no_long_press_is_recognised_where_the_owner_made_none() {
 // scrolled at 679 ms, once the finger had gone past 16 mm. Replayed, the slow drag at 24.211 s of
 // title-bar-2026-11-25 ended the same way (a replay has no window drag areas).
 
-const NUDGES: &str = include_str!("../../../../Tests/TouchCoreTests/Fixtures/nudges-2026-11-26.jsonl");
+const NUDGES: &str = include_str!("fixtures/nudges-2026-11-26.jsonl");
 
 /// When the first scroll from `from_ns` on began.
 fn scroll_begun(replay: &Replay, from_ns: u64) -> Option<u64> {
@@ -505,14 +504,14 @@ fn the_nudges_are_six_scrolls_and_a_tap() {
 // the left edge, and a finger held at the left edge for 3.6 s to right-click. In its last half
 // second the finger wandered along the edge to 5.9 mm from where it had landed.
 
-const LONG_PRESS: &str = include_str!("../../../../Tests/TouchCoreTests/Fixtures/long-press-2026-11-26.jsonl");
+const LONG_PRESS: &str = include_str!("fixtures/long-press-2026-11-26.jsonl");
 
 // short-nudge-2026-11-26 holds 7 s of the owner's use at 21:19, on the build of 21:11: a scroll up
 // a terminal from its left edge, a tap, the nudge below, and then the panel's storm along a row.
 // The nudge's finger rested 286 ms, crept 6.3 mm up in 280 ms and lifted at 563 ms: under the tap
 // slop and past the long-press time, and on that build a right-click.
 
-const SHORT_NUDGE: &str = include_str!("../../../../Tests/TouchCoreTests/Fixtures/short-nudge-2026-11-26.jsonl");
+const SHORT_NUDGE: &str = include_str!("fixtures/short-nudge-2026-11-26.jsonl");
 
 #[test]
 fn a_short_nudge_scrolls_on_lift() {

@@ -284,7 +284,7 @@ You'll change a few constants and possibly the report parser, then rebuild.
    ```bash
    ioreg -r -n TouchScreen -l -w0 | grep ReportDescriptor
    ```
-   decode the touch collection (report ID, per-contact field order and sizes, logical maximums, where the contact count lives) and add a decoder alongside the two. Add your recording to `Tests/TouchCoreTests/Fixtures/` and a replay test for it to `rust/crates/touchcore/tests/replay.rs`.
+   decode the touch collection (report ID, per-contact field order and sizes, logical maximums, where the contact count lives) and add a decoder alongside the two. Add your recording to `rust/crates/touchcore/tests/fixtures/` and a replay test for it to `rust/crates/touchcore/tests/replay.rs`.
 
 4. **Point it at your display.** With exactly one external display, nothing to do: the pipeline falls back to it when no EDID match is configured. To pin it exactly, run the read-only probe:
    ```bash
@@ -397,7 +397,7 @@ cargo test --manifest-path rust/Cargo.toml --workspace --features debug
 ./scripts/install.sh
 ```
 
-- `cargo test` runs the unit tests, the delivery tests and the replay of two recorded panel sessions, on the prod build's code. The second command runs them again with the `debug` feature: the log and the diagnostics are compiled only then, so that pass is theirs.
+- `cargo test` runs the unit tests, the delivery tests and the replay of seven recorded panel sessions, on the prod build's code. The second command runs them again with the `debug` feature: the log and the diagnostics are compiled only then, so that pass is theirs.
 - `./scripts/bundle.sh` builds and signs `build/TouchNext.app`: the prod build, or with `--debug` the one with the log and the diagnostics.
 - `./scripts/install.sh` builds, installs to `~/Applications` and restarts the login item. `--debug` installs a debug build.
 - `CHANGELOG.md` lists the changes in each version.
@@ -408,12 +408,12 @@ cargo test --manifest-path rust/Cargo.toml --workspace --features debug
 | `rust/crates/touchhid` | The touch panel over IOKit HID, and the clock the driver runs on |
 | `rust/crates/touchplatform` | macOS I/O: displays and windows, event synthesis, Direct and Warp delivery, system gestures, the pipeline that connects them, diagnostics |
 | `rust/crates/touchnext` | The menu-bar app: menu, saved settings, login item. With the `debug` feature also the log file, the Event Sink, the probe and the replay |
-| `Tests/TouchCoreTests/Fixtures` | Two recorded panel sessions, replayed by the tests in `rust/crates/touchcore/tests` |
+| `rust/crates/touchcore/tests/fixtures` | Seven recorded panel sessions, replayed by `rust/crates/touchcore/tests/replay.rs` |
 | `docs` | The original plan with implementation notes (`spec.md`) and per-feature investigations (`backlog.md`) |
 
 Apple's frameworks are reached through the `objc2` bindings; the tree holds no hand-written `extern` block. The private calls the headers leave out are looked up by name at run time.
 
-`Sources/` and `Tests/` still hold the Swift implementation this Rust port replaced, and go once the port is confirmed on the hardware.
+The Swift implementation the port replaced left the tree on 2026-11-26. It is in git history, under `Sources/` and `Tests/` up to commit `e0433f6`.
 
 ## Caveats
 
