@@ -29,8 +29,11 @@ struct RecordedReport {
     hex: String,
 }
 
-/// How long the deadlines the recording leaves behind are given to run out. The longest drag grace
-/// is 1.2 s.
+/// How long before the first report of a recording is due: for the pipeline to take the settings.
+const LEAD: Duration = Duration::from_millis(200);
+
+/// How long the deadlines the recording leaves behind are given to run out: the diagnostic line
+/// a second after a system gesture, and the 500 ms tap interval.
 const TAIL: Duration = Duration::from_millis(3_000);
 
 /// Replays the recording at `path` in dry run and prints what the pipeline does with it. With
@@ -47,11 +50,15 @@ pub fn run(path: &str, frames: bool) -> Result<(), String> {
         return Err("the touch display is not found, and the recording maps onto it".to_owned());
     }
 
-    // The pipeline's deadlines read this run's clock, so the recording's stamps move onto it. The
-    // base is read before anything else, so that no stamp is ahead of the clock when its report
-    // is fed.
-    let base_ns = clock::now_ns();
-    let started = Instant::now();
+    // The zero of the recording, on both clocks. Each report is stamped for the moment the recording
+    // says it came, on the pipeline's clock, and fed when that moment comes round on this one; a
+    // line is printed with that moment into the recording. So two runs play the same, and so does
+    // a run fed a little late: the pipeline decides against the stamps, and runs whatever fell due
+    // before a report before it. Stamped as they were fed, a sleep that overshot stretched a step
+    // or dropped a chain, and the same recording scrolled once and tapped the next time.
+    let zero = Instant::now() + LEAD;
+    let zero_ns = clock::now_ns() + LEAD.as_nanos() as u64;
+    let started = zero;
     let pipeline = InputPipeline::new(PipelineHooks {
         status: Some(Box::new(move |line| emit(started, line))),
         contacts: frames.then(|| {
@@ -77,12 +84,12 @@ pub fn run(path: &str, frames: bool) -> Result<(), String> {
 
     let first_ns = reports[0].0;
     for (t_ns, bytes) in reports {
-        let due = started + Duration::from_nanos(t_ns - first_ns);
+        let due = zero + Duration::from_nanos(t_ns - first_ns);
         let now = Instant::now();
         if due > now {
             std::thread::sleep(due - now);
         }
-        pipeline.feed(PanelEvent::Report(RawReport { timestamp_ns: base_ns + (t_ns - first_ns), bytes }));
+        pipeline.feed(PanelEvent::Report(RawReport { timestamp_ns: zero_ns + (t_ns - first_ns), bytes }));
     }
     std::thread::sleep(TAIL);
     emit(started, &format!("replayed {count} reports from {path}"));

@@ -5,9 +5,10 @@
 //! thread and talks to it over a channel. The machine never reads the clock and never starts a
 //! timer: every method takes `now_ns` (nanoseconds of [`touchhid::clock`], the clock the report
 //! stamps are on), whatever is pending is a deadline in the struct, and [`Pipeline::tick`]
-//! performs what is due. The Swift kept this state on the HID source's dispatch queue and woke it
-//! twenty times a second with a repeating timer; this thread sleeps until the earliest deadline
-//! or the next command.
+//! performs what is due. While reports come, `now_ns` is the report's stamp: the machine's time
+//! is when the panel was heard. The Swift kept this state on the HID source's dispatch queue and
+//! woke it twenty times a second with a repeating timer; this thread sleeps until the earliest
+//! deadline or the next command.
 //!
 //! The thread runs at the user-interactive quality of service the Swift queue ran at, and the
 //! display-reconfiguration callback only pushes a command into the channel: every Apple call and
@@ -29,7 +30,6 @@ use objc2_core_graphics::{
 };
 use smallvec::SmallVec;
 use touchcore::dock_hold::{DockSwipeHold, Step as HoldStep};
-use touchcore::filter::SingleTouchFilter;
 use touchcore::focus::{Action as FocusAction, FocusKeeper};
 use touchcore::gestures::{
     DockSwipeKind, GestureAction, GestureConfig, GesturePhase, GestureRecognizer, InputMode,
@@ -46,7 +46,8 @@ use touchcore::policy::{
 };
 use touchcore::prefs::TrackpadPreferences;
 use touchcore::report::{ReportParser, Source};
-use touchcore::tracker::{ContactEvent, ContactPhase, ContactTracker};
+use touchcore::stream::ContactStream;
+use touchcore::tracker::{ContactEvent, ContactPhase};
 use touchcore::tuio::{TUIO, TUIOSessions};
 use touchhid::clock;
 use touchhid::{HidTouchSource, PanelEvent};
@@ -70,7 +71,8 @@ use crate::window::{AppDirectory, WindowDragArea, WindowLocator};
 const SYSTEM_GESTURE_CURSOR_DELAY_NS: u64 = 800_000_000;
 /// Longest push against a bottom edge before giving up on moving the Dock.
 const DOCK_PUSH_TIMEOUT_MS: f64 = 1500.0;
-/// The expiry and recognizer-pump cadence (the Swift `expireTimer`, 50 ms repeating).
+/// The recognizer-pump cadence (the Swift `expireTimer`, 50 ms repeating): a long press, a tap
+/// interval or a drag grace passes with no event to carry it. The contact stream keeps its own.
 const CADENCE_NS: u64 = 50_000_000;
 /// How often a TUIO idle frame goes out while nothing touches, so clients keep their state.
 const TUIO_IDLE_NS: u64 = 1_000_000_000;
@@ -271,7 +273,9 @@ impl InputPipeline {
     }
 
     /// Hands the pipeline a panel event as if the panel had sent it, in order with everything else.
-    /// The replay tool (`--replay`) uses it on a pipeline that never started the source.
+    /// The replay tool (`--replay`) uses it on a pipeline that never started the source, with each
+    /// report stamped for the moment the recording says it came: the pipeline runs whatever fell
+    /// due before that moment first, so a recording fed a little late is played the same.
     pub fn feed(&self, event: PanelEvent) {
         let _ = self.tx.send(Command::Panel(event));
     }
@@ -352,42 +356,81 @@ fn set_thread_qos_user_interactive() {
 
 /// The pipeline's thread: owns the state machine, sleeps until a command or the earliest
 /// deadline, and never polls.
+///
+/// The machine runs on the reports' own clock. A report is stamped when it reaches the process,
+/// and that stamp is its time while it is handled ([`handle`]): the machine's decisions depend on
+/// when the reports came, not on the delays of this thread in between (an Accessibility query
+/// takes milliseconds, sometimes tens), and a recording stamped as it was made plays back the
+/// same way every time. Other commands, and the wait for a deadline, are on the system clock.
 fn thread_main(rx: mpsc::Receiver<Command>, hooks: Arc<Mutex<PipelineHooks>>, shared: Arc<Shared>) {
     set_thread_qos_user_interactive();
     let mut pipeline = Pipeline::new(hooks, shared);
+    // The machine's time: the moment of the latest report, command or deadline it has been taken to.
+    let mut now_ns = clock::now_ns();
     loop {
-        let now = clock::now_ns();
+        // What is waiting goes first, in order: each command takes the machine to its own moment.
+        loop {
+            let Ok(command) = rx.try_recv() else { break };
+            if handle(&mut pipeline, &mut now_ns, command) {
+                return;
+            }
+        }
         match pipeline.next_deadline_ns() {
-            // Whatever is due comes first, at once.
-            Some(deadline) if now >= deadline => pipeline.tick(now),
-            Some(deadline) => match rx.recv_timeout(Duration::from_nanos(deadline - now)) {
+            // Due, and overtaken by nothing: it runs, at its own moment.
+            Some(deadline) if deadline <= now_ns => {
+                pipeline.tick(deadline);
+                now_ns = deadline;
+            }
+            Some(deadline) => match rx.recv_timeout(Duration::from_nanos(deadline - now_ns)) {
                 Ok(command) => {
-                    let now = clock::now_ns();
-                    if pipeline.command(command, now) {
-                        break;
+                    if handle(&mut pipeline, &mut now_ns, command) {
+                        return;
                     }
                 }
-                // The deadline came due while waiting; the next pass ticks.
-                Err(RecvTimeoutError::Timeout) => {}
+                // The deadline came due while waiting; the next pass runs it.
+                Err(RecvTimeoutError::Timeout) => now_ns = deadline,
                 Err(RecvTimeoutError::Disconnected) => {
-                    pipeline.stop(clock::now_ns());
-                    break;
+                    pipeline.stop(now_ns);
+                    return;
                 }
             },
             None => match rx.recv() {
                 Ok(command) => {
-                    let now = clock::now_ns();
-                    if pipeline.command(command, now) {
-                        break;
+                    if handle(&mut pipeline, &mut now_ns, command) {
+                        return;
                     }
                 }
                 Err(_) => {
-                    pipeline.stop(clock::now_ns());
-                    break;
+                    pipeline.stop(now_ns);
+                    return;
                 }
             },
         }
     }
+}
+
+/// Takes the machine to one command's moment and applies it there. A report's moment is its
+/// stamp, and whatever fell due before it runs first, each at its own moment: a lift the panel
+/// has gone quiet after is over before a touch that was stamped later begins. Returns true when
+/// the thread should leave.
+fn handle(pipeline: &mut Pipeline, now_ns: &mut u64, command: Command) -> bool {
+    let at_ns = match &command {
+        Command::Panel(PanelEvent::Report(report)) => {
+            while let Some(deadline) = pipeline.next_deadline_ns()
+                && deadline <= report.timestamp_ns
+            {
+                pipeline.tick(deadline);
+                *now_ns = deadline;
+            }
+            *now_ns = (*now_ns).max(report.timestamp_ns);
+            report.timestamp_ns
+        }
+        _ => {
+            *now_ns = (*now_ns).max(clock::now_ns());
+            *now_ns
+        }
+    };
+    pipeline.command(command, at_ns)
 }
 
 /// What the recognizer's `drag_zone` closure and the delivery decision share, behind an `Arc`
@@ -538,17 +581,17 @@ struct Pipeline {
     deliverer: Deliverer<SystemDeliveryEffects>,
     dock_swipe: DockSwipe,
     settings: PipelineSettings,
-    tracker: ContactTracker,
+    /// The panel's reports as contact events, repaired.
+    stream: ContactStream,
     recognizer: GestureRecognizer,
     /// Every finger on the panel right now, in panel coordinates.
     contacts: BTreeMap<u8, PanelPoint>,
-    /// The next 50 ms step of the expiry and recognizer-pump cadence; only while a finger is on
-    /// the panel (the Swift `expireTimer`).
+    /// The next 50 ms step of the recognizer-pump cadence; only while a finger is on the panel
+    /// (the Swift `expireTimer`).
     cadence_deadline: Option<u64>,
     touch_count: usize,
     max_touch_count: usize,
     panel_mode: PanelModeWatch,
-    touch_filter: SingleTouchFilter,
     /// When the last digitizer frame arrived; mouse-emulation frames newer than this are dropped.
     last_digitizer_frame_ns: u64,
     /// Report census: settles from the log alone whether the panel is streaming digitizer
@@ -657,21 +700,21 @@ impl Pipeline {
             deliverer.logging_to(forward_to_status(&hooks)),
             dock_swipe.logging_to(forward_to_status(&hooks)),
         );
+        let settings = PipelineSettings::default();
         Self {
             hooks,
             shared,
             source: HidTouchSource::new(),
             deliverer,
             dock_swipe,
-            settings: PipelineSettings::default(),
-            tracker: ContactTracker::default(),
+            stream: ContactStream::for_panel(settings.panel_width_mm, settings.panel_height_mm),
+            settings,
             recognizer: GestureRecognizer::new(GestureConfig::default()),
             contacts: BTreeMap::new(),
             cadence_deadline: None,
             touch_count: 0,
             max_touch_count: 0,
             panel_mode: PanelModeWatch::new(),
-            touch_filter: SingleTouchFilter::default(),
             last_digitizer_frame_ns: 0,
             digitizer_reports: 0,
             mouse_reports: 0,
@@ -795,14 +838,10 @@ impl Pipeline {
             }
             None => {}
         }
-        for repaired in
-            self.touch_filter.filter(frame, now, self.settings.panel_width_mm, self.settings.panel_height_mm)
-        {
-            let events = self.tracker.update(&repaired, now);
-            #[cfg(feature = "debug")]
-            self.trace_contacts(&events, "with a report");
-            self.process(events, now);
-        }
+        let events = self.stream.report(frame, now);
+        #[cfg(feature = "debug")]
+        self.trace_contacts(&events, "with a report");
+        self.process(events, now);
     }
 
     /// The report census (the Swift timer's 10 s line): when a window of 10 s or more has closed,
@@ -858,7 +897,7 @@ impl Pipeline {
             self.max_touch_count = self.max_touch_count.max(self.touch_count);
             self.hooks_touch_count();
         }
-        // The 50 ms cadence (tracker expiry, recognizer pump) runs while a finger is on the panel.
+        // The 50 ms cadence (the recognizer pump) runs while a finger is on the panel.
         if self.contacts.is_empty() {
             self.cadence_deadline = None;
         } else if self.cadence_deadline.is_none() {
@@ -891,6 +930,7 @@ impl Pipeline {
             }
         };
         offer(self.cadence_deadline);
+        offer(self.stream.next_deadline_ns());
         offer(self.recognizer.next_deadline_ns());
         offer(self.deliverer.next_deadline_ns());
         offer(self.dock_swipe.next_deadline_ns());
@@ -924,6 +964,7 @@ impl Pipeline {
             }
         };
         offer(self.cadence_deadline, Due::Cadence);
+        offer(self.stream.next_deadline_ns(), Due::Contacts);
         offer(self.recognizer.next_deadline_ns(), Due::Recognizer);
         offer(self.deliverer.next_deadline_ns(), Due::Deliverer);
         offer(self.dock_swipe.next_deadline_ns(), Due::DockSwipe);
@@ -941,13 +982,14 @@ impl Pipeline {
     /// Runs one piece of due work.
     fn run_due(&mut self, due: Due, now_ns: u64) {
         match due {
-            Due::Cadence => {
-                let events = self.tracker.expire(now_ns);
+            Due::Contacts => {
+                let events = self.stream.expire(now_ns);
                 #[cfg(feature = "debug")]
                 self.trace_contacts(&events, "on the timer");
                 self.process(events, now_ns);
-                // Pump the recognizer so a drag grace past its deadline commits without new
-                // events.
+            }
+            Due::Cadence => {
+                // Pump the recognizer so a deadline passes with no event to carry it.
                 if self.active_input_mode != InputMode::Multitouch {
                     let actions = self.recognizer.handle(&[], now_ns);
                     for action in actions {
@@ -1661,9 +1703,9 @@ impl Pipeline {
         sender.send(&TUIO::frame(&cursors, self.tuio_sequence));
     }
 
-    /// Fresh tracker and recognizer (start, stop, display lost), keeping the current settings.
+    /// A fresh contact stream and recognizer (start, stop, display lost), keeping the settings.
     fn reset_gesture_state(&mut self, now_ns: u64) {
-        self.tracker = ContactTracker::for_panel(self.settings.panel_width_mm, self.settings.panel_height_mm);
+        self.stream = ContactStream::for_panel(self.settings.panel_width_mm, self.settings.panel_height_mm);
         let mut fresh = GestureRecognizer::new(GestureConfig::default());
         apply_gesture_settings(&self.settings, &mut fresh);
         // In scroll mode a one-finger pan that starts on a toolbar or title bar still moves the
@@ -1698,7 +1740,7 @@ impl Pipeline {
     }
 
     /// Where each finger began or ended, as the tracker reports it, with whether the events came
-    /// with a report or from the cadence timer. Only a debug build's log has these lines.
+    /// with a report or from the timer. Only a debug build's log has these lines.
     #[cfg(feature = "debug")]
     fn trace_contacts(&self, events: &[ContactEvent], from: &str) {
         let Some(mapper) = self.shared.mapper() else { return };
@@ -1732,8 +1774,11 @@ impl Pipeline {
 /// What fell due: one entry of the deadline set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Due {
-    /// The 50 ms cadence: tracker expiry, then the recognizer pump.
+    /// The 50 ms cadence: the recognizer pump.
     Cadence,
+    /// The contact stream's own deadline: a lift report the panel has gone quiet after (or
+    /// held for the debounce), or a press that has stopped reporting.
+    Contacts,
     /// The recognizer's own deadline, a drag grace running out.
     Recognizer,
     /// The deliverer's pending cursor returns and re-sends.
@@ -1800,5 +1845,63 @@ mod tests {
     #[test]
     fn swipe_between_pages_is_on_by_default() {
         assert!(PipelineSettings::default().swipe_between_pages);
+    }
+
+    /// A pipeline that has not started, with a hook keeping the x of every set of fingers it
+    /// reports, in the panel's units.
+    fn machine() -> (Pipeline, Arc<Mutex<Vec<Vec<u16>>>>) {
+        let fingers = Arc::new(Mutex::new(Vec::new()));
+        let kept = Arc::clone(&fingers);
+        let hooks = Arc::new(Mutex::new(PipelineHooks {
+            status: None,
+            contacts: Some(Box::new(move |fingers: &BTreeMap<u8, PanelPoint>| {
+                kept.lock().unwrap().push(
+                    fingers.values().map(|point| (point.x * 16383.0).round() as u16).collect(),
+                );
+            })),
+            touch_count: None,
+            #[cfg(feature = "debug")]
+            report: None,
+        }));
+        let shared = Arc::new(Shared {
+            apps: AppDirectory::new(),
+            mapper: Mutex::new(None),
+            window_drag_memo: Mutex::new(Vec::new()),
+            own_pid: std::process::id() as i32,
+            hooks,
+        });
+        (Pipeline::new(Arc::clone(&shared.hooks), shared), fingers)
+    }
+
+    /// A WCH mouse report (report id 7: buttons, x, y, wheel), the tip down or up at a third or
+    /// two thirds of the panel's width, on its middle row.
+    fn report(at_ns: u64, x: u16, down: bool) -> Command {
+        let [xl, xh] = x.to_le_bytes();
+        let [yl, yh] = 4800u16.to_le_bytes();
+        Command::Panel(PanelEvent::Report(touchhid::RawReport {
+            timestamp_ns: at_ns,
+            bytes: vec![7, u8::from(down), xl, xh, yl, yh, 0],
+        }))
+    }
+
+    // A touch at 1.000 s, its lift report at 1.050 s, and a touch somewhere else stamped from
+    // 1.300 s: the pipeline's thread had other work from 1.035 s on, so it gets all of them at
+    // once. The first touch ended at 1.100 s, when the panel had been quiet for 50 ms, and the
+    // second is a touch of its own. Handled as they queue, with no regard for the stamps, the
+    // second touch came while the first was still held, and looked like its finger coming back.
+    #[test]
+    fn a_report_stamped_after_a_deadline_finds_it_run() {
+        let (mut pipeline, fingers) = machine();
+        let mut now_ns = 0;
+        for at_ns in [1_000_000_000, 1_017_000_000, 1_034_000_000] {
+            assert!(!handle(&mut pipeline, &mut now_ns, report(at_ns, 4915, true)));
+        }
+        assert!(!handle(&mut pipeline, &mut now_ns, report(1_050_000_000, 4915, false)));
+        assert_eq!(now_ns, 1_050_000_000);
+        for at_ns in [1_300_000_000, 1_317_000_000, 1_334_000_000] {
+            assert!(!handle(&mut pipeline, &mut now_ns, report(at_ns, 11468, true)));
+        }
+        assert_eq!(*fingers.lock().unwrap(), vec![vec![4915], vec![], vec![11468]]);
+        assert_eq!(now_ns, 1_334_000_000);
     }
 }

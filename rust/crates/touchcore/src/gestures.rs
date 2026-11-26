@@ -235,9 +235,12 @@ pub struct GestureConfig {
     pub velocity_window_ns: u64,
     pub velocity_stale_ns: u64,
     /// When a drag's contact lifts, the press is held this long before it is committed, and a
-    /// finger returning within a velocity-scaled radius resumes the drag seamlessly. WCH
-    /// dropouts measured on this panel run 250 ms to 1.7 s mid-drag (probe 2026-11-24); without
-    /// the grace, a slow drag shatters into re-grabs wherever the finger reappeared.
+    /// finger returning within a velocity-scaled radius resumes the drag seamlessly. Off by
+    /// default (the Swift build held the press for 1.2 s): the tracker now carries a contact
+    /// through the panel's tip flaps, so what reaches the recognizer as a lift is one, and the
+    /// next touch is a new gesture. With the grace on, that next touch is lost instead: measured
+    /// on 2026-11-25, a tap 1.2 s after a drag was taken for the drag resuming, and the window
+    /// moved 68 pt.
     pub drag_grace_ns: u64,
     pub drag_resume_radius_mm: f64,
     /// How far the resume radius grows per second of finger speed at the lift.
@@ -245,7 +248,7 @@ pub struct GestureConfig {
 }
 
 impl Default for GestureConfig {
-    /// Exactly the Swift struct's default values.
+    /// The Swift struct's default values, but for the drag grace, which is off.
     fn default() -> Self {
         Self {
             one_finger_drag: OneFingerDragMode::Scroll,
@@ -284,7 +287,7 @@ impl Default for GestureConfig {
             max_contacts: 3,
             velocity_window_ns: 100_000_000,
             velocity_stale_ns: 50_000_000,
-            drag_grace_ns: 1_200_000_000,
+            drag_grace_ns: 0,
             drag_resume_radius_mm: 20.0,
             drag_resume_speed_gain: 0.75,
         }
@@ -1570,7 +1573,7 @@ mod tests {
 
     #[test]
     fn moving_beyond_the_slop_early_starts_a_drag_from_the_touch_down_point() {
-        let mut s = Script::configured(|c| c.drag_grace_ns = 0);
+        let mut s = Script::new();
         s.at(0, &[began(0, 0.3, 0.3)]);
         s.at(50, &[moved(0, 0.3 + mm_x(12.0), 0.3)]);
         s.at(70, &[moved(0, 0.3 + mm_x(20.0), 0.3)]);
@@ -1795,7 +1798,7 @@ mod tests {
 
     #[test]
     fn a_drag_on_a_title_bar_is_pressed_where_the_finger_is() {
-        let mut s = Script::configured(|c| c.drag_grace_ns = 0);
+        let mut s = Script::new();
         s.recognizer.drag_zone = Some(Box::new(|_| true));
         s.at(0, &[began(0, 0.3, 0.3)]);
         let finger = PanelPoint::new(0.3 + mm_x(12.0), 0.3);
@@ -1810,7 +1813,7 @@ mod tests {
 
     #[test]
     fn a_title_bar_drag_whose_finger_left_the_drag_area_is_pressed_where_it_landed() {
-        let mut s = Script::configured(|c| c.drag_grace_ns = 0);
+        let mut s = Script::new();
         s.recognizer.drag_zone = Some(Box::new(|point| point.x < 0.3 + mm_x(9.0)));
         s.at(0, &[began(0, 0.3, 0.3)]);
         let finger = PanelPoint::new(0.3 + mm_x(12.0), 0.3);
@@ -1829,7 +1832,7 @@ mod tests {
     // (24 mm), so it was never a drag and the lift was a right-click.
     #[test]
     fn a_slow_drag_on_a_title_bar_starts_at_the_tap_slop() {
-        let mut s = Script::configured(|c| c.drag_grace_ns = 0);
+        let mut s = Script::new();
         s.recognizer.drag_zone = Some(Box::new(|_| true));
         s.at(0, &[began(0, 0.3, 0.3)]);
         for step in 1u64..=8 {
@@ -1868,8 +1871,19 @@ mod tests {
         s.at(1_700, &[moved(0, 0.5, 0.5 + mm_y(17.0))]);
         assert_eq!(s.actions.first(), Some(&GestureAction::Scroll { dx: 0.0, dy: mm_y(17.0), phase: GesturePhase::Began }));
         s.at(1_800, &[ended(0, 0.5, 0.5 + mm_y(17.0))]);
-        s.at(3_100, &[]); // the drag grace runs out: the scroll ends
         assert!(matches!(s.actions.last(), Some(GestureAction::ScrollEnded { .. })), "a swipe that scrolled does not right-click on lift: {:?}", s.actions);
+    }
+
+    // Drift of 2.5 mm in the first 100 ms, then clear travel at 600 ms: a swipe, classified by
+    // when the finger first moved and how far it has travelled. Judged by the touch's age alone,
+    // 600 ms made it a hold and the swipe selected text.
+    #[test]
+    fn a_swipe_that_drifts_within_its_first_100_ms_scrolls_however_late_it_travels() {
+        let mut recognizer = GestureRecognizer::default();
+        let _ = recognizer.handle(&[began(0, 0.5, 0.5)], 0);
+        let _ = recognizer.handle(&[moved(0, 0.508, 0.5)], 100 * MS);
+        let actions = recognizer.handle(&[moved(0, 0.59375, 0.5)], 600 * MS);
+        assert_eq!(actions.first(), Some(&GestureAction::Scroll { dx: 0.09375, dy: 0.0, phase: GesturePhase::Began }));
     }
 
     /// The other side of the cap: a finger planted to right-click keeps 16.75 mm to settle in,
@@ -1889,7 +1903,7 @@ mod tests {
     /// finger landed.
     #[test]
     fn a_finger_that_travels_past_the_tolerance_after_a_hold_drags() {
-        let mut s = Script::configured(|c| c.drag_grace_ns = 0);
+        let mut s = Script::new();
         s.at(0, &[began(0, 0.4, 0.4)]);
         s.at(1_000, &[moved(0, 0.4 + mm_x(20.0), 0.4)]);
         assert_eq!(
@@ -2456,7 +2470,27 @@ mod tests {
         assert_eq!(s.actions, [GestureAction::RightClick { at: PanelPoint::new(0.4 + mm_x(12.0), 0.4) }]);
     }
 
-    // Drag grace (WCH contacts flap mid-drag)
+    // Drag grace (off by default; the tracker bridges the panel's tip flaps)
+
+    /// A lift ends the drag when the tracker reports it. The touch that follows is its own
+    /// gesture, even where the drag stopped and soon after it: owner, 2026-11-25, "did it on the
+    /// telegram windown and it didnt respond and then it jumped around".
+    #[test]
+    fn a_touch_after_the_drag_has_lifted_is_a_new_gesture() {
+        let mut s = Script::new();
+        s.at(0, &[began(0, 0.3, 0.3)]);
+        s.at(50, &[moved(0, 0.3 + mm_x(12.0), 0.3)]);
+        s.at(70, &[moved(0, 0.3 + mm_x(20.0), 0.3)]);
+        s.at(80, &[ended(0, 0.3 + mm_x(20.0), 0.3)]);
+        assert_eq!(s.actions.last(), Some(&GestureAction::DragEnded { at: PanelPoint::new(0.3 + mm_x(20.0), 0.3) }));
+        assert_eq!(s.recognizer.next_deadline_ns(), None);
+        s.at(380, &[began(1, 0.3 + mm_x(24.0), 0.3)]); // 4 mm on, 300 ms later
+        s.at(440, &[ended(1, 0.3 + mm_x(24.0), 0.3)]);
+        assert_eq!(s.actions.last(), Some(&GestureAction::Tap { at: PanelPoint::new(0.3 + mm_x(24.0), 0.3), count: 1 }));
+        assert_eq!(s.actions.iter().filter(|a| matches!(a, GestureAction::DragBegan { .. })).count(), 1);
+    }
+
+    // Switched on, the grace holds a drag through a dropout. These tests say so each time.
 
     #[test]
     fn a_flapped_drag_resumes_without_re_grabbing() {
@@ -2533,14 +2567,12 @@ mod tests {
         assert!(matches!(s.actions.last(), Some(GestureAction::ScrollEnded { .. })));
     }
 
-    // Long dropouts (probe 2026-11-24: WCH dropouts run 250 ms to 1.7 s mid-drag)
-
-    /// A long dropout mid-drag: the grace holds the drag, and a finger resuming tens of
-    /// millimetres along its way continues the same drag instead of re-grabbing wherever it
-    /// reappeared.
+    /// With the grace at the Swift build's 1.2 s, a long dropout mid-drag is held, and a finger
+    /// resuming tens of millimetres along its way continues the same drag instead of re-grabbing
+    /// wherever it reappeared.
     #[test]
     fn a_long_dropout_mid_drag_is_bridged_with_a_radius_grown_by_speed() {
-        let mut s = Script::new();
+        let mut s = Script::configured(|c| c.drag_grace_ns = 1_200_000_000);
         s.at(0, &[began(0, 0.3, 0.3)]);
         s.at(50, &[moved(0, 0.3 + mm_x(12.0), 0.3)]);
         s.at(70, &[moved(0, 0.3 + mm_x(20.0), 0.3)]);
@@ -2562,7 +2594,7 @@ mod tests {
     /// commits its end and the new touch is its own gesture.
     #[test]
     fn a_touch_far_from_the_held_drag_commits_the_end_instead_of_resuming() {
-        let mut s = Script::new();
+        let mut s = Script::configured(|c| c.drag_grace_ns = 1_200_000_000);
         s.at(0, &[began(0, 0.3, 0.3)]);
         s.at(50, &[moved(0, 0.3 + mm_x(12.0), 0.3)]);
         s.at(70, &[moved(0, 0.3 + mm_x(20.0), 0.3)]);

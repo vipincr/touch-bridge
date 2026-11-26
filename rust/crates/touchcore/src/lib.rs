@@ -24,6 +24,7 @@ pub mod prefs;
 #[cfg(feature = "debug")]
 pub mod probe;
 pub mod report;
+pub mod stream;
 pub mod traits;
 pub mod tracker;
 pub mod tuio;
