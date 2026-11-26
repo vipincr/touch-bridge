@@ -15,7 +15,11 @@ pub enum ContactPhase {
 }
 
 /// A per-finger lifecycle change. Coordinates are normalized to 0..=1 across
-/// the panel.
+/// the panel. `at_ns` is when the report behind the event came, except for an
+/// ended contact: when the finger was last seen, because its lift report may
+/// have been held back for some time (see [`ContactTracker`]). A tap or a long
+/// press is judged by how long the finger was there; the time the tracker
+/// waited to be sure it had gone is left out.
 // No Eq: coordinates are f64.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ContactEvent {
@@ -23,6 +27,23 @@ pub struct ContactEvent {
     pub phase: ContactPhase,
     pub x: f64,
     pub y: f64,
+    pub at_ns: u64,
+}
+
+/// How far a finger that is standing still is reported to wander between two
+/// frames (measured: up to 0.7 mm).
+const REST_WANDER_MM: f64 = 1.0;
+
+/// A lift report the tracker is holding back.
+#[derive(Debug, Clone, Copy)]
+struct Held {
+    press: Press,
+    /// When the first lift report of this hold came.
+    lifted_at_ns: u64,
+    /// Whether that report came from where the finger was. Then a later one
+    /// from the panel's origin is the lift at once: together, they are the
+    /// panel saying the finger has left.
+    from_the_finger: bool,
 }
 
 /// One finger on the panel, with what the lift policy needs to know about it.
@@ -44,13 +65,24 @@ struct Press {
 /// forgot the liftoff" is 100 ms (hid-multitouch release_timer); that is this
 /// type's default (100 ms). A lift report is held back, because the JN-MD-IPST105FP reports
 /// the tip off while the finger is still down (116 flaps in three recordings, 2026-11-24 and
-/// 2026-11-25, the longest of eight frames). The press goes on if the tip is back within
-/// `debounce_ns` (250 ms) and within a finger's travel of where it was. A held lift ends
-/// sooner on two signs that the finger is gone, and a real lift is recognised 50 ms after the
-/// panel's last report: no report of any kind for `lift_silence_ns` (50 ms; the panel reports
-/// every 12 to 22 ms while a finger is down, 38 ms apart at the most when it skips one, and
-/// falls quiet after a lift; a tip-on report the jump filter dropped still counts, see
-/// [`ContactTracker::heard`]), or a lift report at the panel's origin.
+/// 2026-11-25, the longest of eight frames). The press goes on if the tip is back within the
+/// hold and within a finger's travel of where it was. The hold is `debounce_ns` (250 ms) for a
+/// finger that was moving when the lift report came and `rest_debounce_ns` (150 ms) for one
+/// standing still: over four recordings (2026-11-24 to 2026-11-26) the panel had a finger back
+/// within 106 ms of a lift report that came while it stood still (the two longest, 105 ms and
+/// 106 ms, were a drag starting) and within 211 ms of one that came while it moved, and a second
+/// tap landed 172 ms after the first one's lift report. A real lift is recognised 50 ms after the panel's last
+/// report: no report of any kind for `lift_silence_ns` (50 ms; the panel reports every 12 to
+/// 22 ms while a finger is down, 38 ms apart at the most when it skips one, and falls quiet
+/// after a lift; a tip-on report the jump filter dropped still counts, see
+/// [`ContactTracker::heard`]).
+///
+/// A lift report from the panel's origin is no surer than any other: the JN-MD-IPST105FP sends
+/// those before a finger lands and while one is still down and moving (owner's recording
+/// 2026-11-26: two drags cut short by them, the finger back 100 ms and 210 ms later). It ends
+/// the touch at once only when a lift report from where the finger was is already being held:
+/// the two together are the panel saying the finger has left (probe 2026-11-24 17:20, 4.254 s;
+/// title-bar 2026-11-25, 12.149 s).
 ///
 /// A returning contact continues the press only within a velocity-scaled radius of where the
 /// finger was, whatever the stream: after a lift report, a touch beyond a finger's travel is a
@@ -62,13 +94,14 @@ struct Press {
 #[derive(Debug)]
 pub struct ContactTracker {
     active: BTreeMap<u8, Press>,
-    /// Lifts held back, with the frame time they happened at.
-    pending: BTreeMap<u8, (Press, u64)>,
+    /// Lifts held back.
+    pending: BTreeMap<u8, Held>,
     /// Frame contact id → the id this finger continues as (cross-id adoption).
     alias: BTreeMap<u8, u8>,
     last_frame_ns: u64,
     lift_timeout_ns: u64,
     debounce_ns: u64,
+    rest_debounce_ns: u64,
     lift_silence_ns: u64,
     adoption_base_mm: f64,
     adoption_speed_gain: f64,
@@ -77,11 +110,12 @@ pub struct ContactTracker {
 }
 
 impl ContactTracker {
-    /// The kernel's 100 ms liftoff timeout; a WCH flap held for 250 ms, ended by 50 ms of
-    /// silence; a 15 mm adoption base at 0.75 speed gain; and the JN-MD-IPST105FP's 221.9 mm by
-    /// 147.9 mm active area.
+    /// The kernel's 100 ms liftoff timeout; a WCH flap held for 250 ms, 150 ms for a finger
+    /// standing still, ended by 50 ms of silence; a 15 mm adoption base at 0.75 speed gain; and
+    /// the JN-MD-IPST105FP's 221.9 mm by 147.9 mm active area.
     const DEFAULT_LIFT_TIMEOUT_NS: u64 = 100_000_000;
     const DEFAULT_DEBOUNCE_NS: u64 = 250_000_000;
+    const DEFAULT_REST_DEBOUNCE_NS: u64 = 150_000_000;
     const DEFAULT_LIFT_SILENCE_NS: u64 = 50_000_000;
     const DEFAULT_ADOPTION_BASE_MM: f64 = 15.0;
     const DEFAULT_ADOPTION_SPEED_GAIN: f64 = 0.75;
@@ -91,6 +125,7 @@ impl ContactTracker {
     pub fn new(
         lift_timeout_ns: u64,
         debounce_ns: u64,
+        rest_debounce_ns: u64,
         adoption_base_mm: f64,
         adoption_speed_gain: f64,
         panel_width_mm: f64,
@@ -103,6 +138,7 @@ impl ContactTracker {
             last_frame_ns: 0,
             lift_timeout_ns,
             debounce_ns,
+            rest_debounce_ns,
             lift_silence_ns: Self::DEFAULT_LIFT_SILENCE_NS,
             adoption_base_mm,
             adoption_speed_gain,
@@ -117,6 +153,7 @@ impl ContactTracker {
         Self::new(
             Self::DEFAULT_LIFT_TIMEOUT_NS,
             Self::DEFAULT_DEBOUNCE_NS,
+            Self::DEFAULT_REST_DEBOUNCE_NS,
             Self::DEFAULT_ADOPTION_BASE_MM,
             Self::DEFAULT_ADOPTION_SPEED_GAIN,
             panel_width_mm,
@@ -148,9 +185,9 @@ impl ContactTracker {
             // a same-id lift that misses the window or the radius still lets
             // the cross-id search run, so both are modelled here.
             let mut same_id_adopted = false;
-            if let Some(&(press, lifted_at_ns)) = self.pending.get(&contact.id) {
+            if let Some(Held { press, lifted_at_ns, .. }) = self.pending.get(&contact.id).copied() {
                 let gap_ns = at_ns.saturating_sub(lifted_at_ns);
-                if gap_ns <= self.debounce_ns
+                if gap_ns <= self.hold_ns(&press)
                     && self.distance_mm(contact, &press) <= self.adoption_radius_mm(&press, gap_ns)
                 {
                     // Same id back within the window and within a finger's
@@ -182,17 +219,19 @@ impl ContactTracker {
 
         for contact in frame.contacts.iter().filter(|c| !c.touching && !touching_ids.contains(&c.id)) {
             let key = self.alias.get(&contact.id).copied().unwrap_or(contact.id);
-            let lifted = self.active.remove(&key).map(|press| (press, at_ns)).or_else(|| self.pending.remove(&key));
-            if let Some((press, lifted_at_ns)) = lifted {
-                // A lift report says the finger is gone; its coordinates are never the place of
-                // anything. The JN-MD-IPST105FP sends the first one where the finger was and, a
-                // frame or more later, the rest at the panel's origin: that one is final.
-                if contact.x == 0.0 && contact.y == 0.0 {
-                    self.alias.retain(|_, target| *target != key);
-                    events.push(ContactEvent { id: key, phase: ContactPhase::Ended, x: press.x, y: press.y });
-                } else {
-                    self.pending.insert(key, (press, lifted_at_ns));
-                }
+            let held = self.active.remove(&key).map(|press| Held {
+                from_the_finger: self.distance_mm(contact, &press) <= REST_WANDER_MM,
+                press,
+                lifted_at_ns: at_ns,
+            }).or_else(|| self.pending.remove(&key));
+            // A lift report says the finger is gone, and its coordinates are never the place of
+            // anything. The panel's origin, after a report from the finger's own place, is the
+            // lift at once (see the type); any other is held for when it came.
+            if let Some(held) = held && contact.x == 0.0 && contact.y == 0.0 && held.from_the_finger {
+                self.alias.retain(|_, target| *target != key);
+                events.push(self.ended(key, &held.press));
+            } else if let Some(held) = held {
+                self.pending.insert(key, held);
             }
         }
         let vanished: SmallVec<[u8; 10]> = self
@@ -203,7 +242,9 @@ impl ContactTracker {
             .collect();
         for id in vanished {
             if let Some(press) = self.active.remove(&id) {
-                self.pending.insert(id, (press, at_ns));
+                // A contact missing from a frame was last seen where it was, so the panel's
+                // origin after that says it has left too.
+                self.pending.insert(id, Held { from_the_finger: true, press, lifted_at_ns: at_ns });
             }
         }
         self.active.retain(|id, _| live_ids.contains(id));
@@ -216,17 +257,17 @@ impl ContactTracker {
             let key = self.alias.get(&contact.id).copied().unwrap_or(contact.id);
             match self.active.get(&key).copied() {
                 Some(previous) if previous.x != contact.x || previous.y != contact.y => {
-                    moved.push(ContactEvent { id: key, phase: ContactPhase::Moved, x: contact.x, y: contact.y });
+                    moved.push(ContactEvent { id: key, phase: ContactPhase::Moved, x: contact.x, y: contact.y, at_ns });
                 }
                 Some(_) => {}
                 None => {
                     // The touch is genuinely new; any held lift for this id is
                     // over (the finger came back farther than a flap would put
                     // it), so believe it now.
-                    if let Some((press, _)) = self.pending.remove(&key) {
-                        events.push(ContactEvent { id: key, phase: ContactPhase::Ended, x: press.x, y: press.y });
+                    if let Some(held) = self.pending.remove(&key) {
+                        events.push(self.ended(key, &held.press));
                     }
-                    began.push(ContactEvent { id: key, phase: ContactPhase::Began, x: contact.x, y: contact.y });
+                    began.push(ContactEvent { id: key, phase: ContactPhase::Began, x: contact.x, y: contact.y, at_ns });
                 }
             }
             let previous = self
@@ -255,7 +296,7 @@ impl ContactTracker {
         let lift = self
             .pending
             .values()
-            .map(|(_, lifted_at_ns)| lifted_at_ns.saturating_add(self.debounce_ns))
+            .map(|held| held.lifted_at_ns.saturating_add(self.hold_ns(&held.press)))
             .min();
         // A press ends when the silence has lasted longer than the lift timeout, so the first moment
         // that is so is one nanosecond past it.
@@ -277,7 +318,7 @@ impl ContactTracker {
             return events;
         }
         for (id, press) in &self.active {
-            events.push(ContactEvent { id: *id, phase: ContactPhase::Ended, x: press.x, y: press.y });
+            events.push(self.ended(*id, press));
         }
         self.active.clear();
         self.alias.clear();
@@ -290,12 +331,12 @@ impl ContactTracker {
     fn nearest_pending(&self, contact: &Contact, at_ns: u64) -> Option<(u8, Press)> {
         let mut best: Option<(u8, Press)> = None;
         let mut best_mm = f64::INFINITY;
-        for (&id, &(press, lifted_at_ns)) in &self.pending {
+        for (&id, &Held { press, lifted_at_ns, .. }) in &self.pending {
             if id == contact.id {
                 continue;
             }
             let gap_ns = at_ns.saturating_sub(lifted_at_ns);
-            if gap_ns > self.debounce_ns {
+            if gap_ns > self.hold_ns(&press) {
                 continue;
             }
             let dist_mm = self.distance_mm(contact, &press);
@@ -305,6 +346,12 @@ impl ContactTracker {
             }
         }
         best
+    }
+
+    /// How long a lift report is held for the press: the whole debounce for a finger that was
+    /// moving, less for one standing still (measured on the type).
+    fn hold_ns(&self, press: &Press) -> u64 {
+        if press.speed < crate::filter::REST_SPEED_MM_S { self.rest_debounce_ns } else { self.debounce_ns }
     }
 
     /// How far a returning finger may have travelled over the gap: a base
@@ -320,18 +367,23 @@ impl ContactTracker {
         let due: SmallVec<[u8; 16]> = self
             .pending
             .iter()
-            .filter(|(_, (_, lifted_at_ns))| {
-                at_ns.saturating_sub(*lifted_at_ns) >= self.debounce_ns
+            .filter(|(_, held)| {
+                at_ns.saturating_sub(held.lifted_at_ns) >= self.hold_ns(&held.press)
                     || at_ns.saturating_sub(self.last_frame_ns) >= self.lift_silence_ns
             })
             .map(|(id, _)| *id)
             .collect();
         for id in due {
-            if let Some((press, _)) = self.pending.remove(&id) {
-                events.push(ContactEvent { id, phase: ContactPhase::Ended, x: press.x, y: press.y });
+            if let Some(held) = self.pending.remove(&id) {
+                events.push(self.ended(id, &held.press));
                 self.alias.retain(|_, target| *target != id);
             }
         }
+    }
+
+    /// The end of a contact: where its finger was, and when it was last seen.
+    fn ended(&self, id: u8, press: &Press) -> ContactEvent {
+        ContactEvent { id, phase: ContactPhase::Ended, x: press.x, y: press.y, at_ns: press.last_at_ns }
     }
 
     fn distance_mm(&self, contact: &Contact, press: &Press) -> f64 {
@@ -358,6 +410,7 @@ impl Default for ContactTracker {
         Self::new(
             Self::DEFAULT_LIFT_TIMEOUT_NS,
             Self::DEFAULT_DEBOUNCE_NS,
+            Self::DEFAULT_REST_DEBOUNCE_NS,
             Self::DEFAULT_ADOPTION_BASE_MM,
             Self::DEFAULT_ADOPTION_SPEED_GAIN,
             Self::DEFAULT_PANEL_WIDTH_MM,
@@ -388,7 +441,7 @@ mod tests {
     fn first_touch_begins() {
         let mut tracker = ContactTracker::default();
         let events = tracker.update(&frame(&[(1, true, 0.2, 0.3)]), 0);
-        assert_eq!(events.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Began, x: 0.2, y: 0.3 }]);
+        assert_eq!(events.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Began, x: 0.2, y: 0.3, at_ns: 0 }]);
         assert_eq!(tracker.active_count(), 1);
     }
 
@@ -397,7 +450,7 @@ mod tests {
         let mut tracker = ContactTracker::default();
         let _ = tracker.update(&frame(&[(1, true, 0.2, 0.3)]), 0);
         assert_eq!(
-            tracker.update(&frame(&[(1, true, 0.25, 0.3)]), 8 * MS).as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.25, y: 0.3 }]);
+            tracker.update(&frame(&[(1, true, 0.25, 0.3)]), 8 * MS).as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.25, y: 0.3, at_ns: 8 * MS }]);
     }
 
     #[test]
@@ -412,19 +465,19 @@ mod tests {
     // lift report's coordinates are never used.
     #[test]
     fn tip_off_ends_the_contact_where_the_finger_last_was() {
-        let mut tracker = ContactTracker::new(100_000_000, 0, 15.0, 0.75, 221.9, 147.9);
+        let mut tracker = ContactTracker::new(100_000_000, 0, 0, 15.0, 0.75, 221.9, 147.9);
         let _ = tracker.update(&frame(&[(1, true, 0.2, 0.3)]), 0);
-        assert_eq!(tracker.update(&frame(&[(1, false, 0.0, 0.0)]), 8 * MS).as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3 }]);
+        assert_eq!(tracker.update(&frame(&[(1, false, 0.0, 0.0)]), 8 * MS).as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0 }]);
         assert_eq!(tracker.active_count(), 0);
     }
 
     #[test]
     fn contact_missing_from_frame_ends_at_its_last_position() {
-        let mut tracker = ContactTracker::new(100_000_000, 0, 15.0, 0.75, 221.9, 147.9);
+        let mut tracker = ContactTracker::new(100_000_000, 0, 0, 15.0, 0.75, 221.9, 147.9);
         let _ = tracker.update(&frame(&[(1, true, 0.2, 0.3), (2, true, 0.6, 0.6)]), 0);
         let events = tracker.update(&frame(&[(2, true, 0.6, 0.6)]), 8 * MS);
         assert_eq!(
-            events.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3 }]);
+            events.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0 }]);
         assert_eq!(tracker.active_count(), 1);
     }
 
@@ -436,17 +489,17 @@ mod tests {
 
     #[test]
     fn silence_longer_than_the_lift_timeout_ends_everything() {
-        let mut tracker = ContactTracker::new(100 * MS, 60_000_000, 15.0, 0.75, 221.9, 147.9);
+        let mut tracker = ContactTracker::new(100 * MS, 60_000_000, 60_000_000, 15.0, 0.75, 221.9, 147.9);
         let _ = tracker.update(&frame(&[(1, true, 0.2, 0.3)]), 0);
         assert!(tracker.expire(50 * MS).is_empty());
         assert_eq!(
-            tracker.expire(150 * MS).as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3 }]);
+            tracker.expire(150 * MS).as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0 }]);
         assert_eq!(tracker.active_count(), 0);
     }
 
     #[test]
     fn events_are_ordered_ended_then_began_then_moved() {
-        let mut tracker = ContactTracker::new(100_000_000, 0, 15.0, 0.75, 221.9, 147.9);
+        let mut tracker = ContactTracker::new(100_000_000, 0, 0, 15.0, 0.75, 221.9, 147.9);
         let _ = tracker.update(&frame(&[(1, true, 0.1, 0.1), (2, true, 0.5, 0.5)]), 0);
         let events = tracker.update(&frame(&[(2, true, 0.55, 0.5), (3, true, 0.9, 0.9)]), 8 * MS);
         let phases: Vec<ContactPhase> = events.iter().map(|e| e.phase).collect();
@@ -459,7 +512,7 @@ mod tests {
     // painting apps / games).
     #[test]
     fn tracks_ten_simultaneous_fingers_through_their_whole_lifecycle() {
-        let mut tracker = ContactTracker::new(100_000_000, 0, 15.0, 0.75, 221.9, 147.9);
+        let mut tracker = ContactTracker::new(100_000_000, 0, 0, 15.0, 0.75, 221.9, 147.9);
         let down: SmallVec<[(u8, bool, f64, f64); 10]> = (0..10u8)
             .map(|i| (i, true, 0.05 + f64::from(i) * 0.09, 0.5))
             .collect();
@@ -494,7 +547,7 @@ mod tests {
         let _ = tracker.update(&frame(&[(1, false, 0.21, 0.3)]), 10 * MS);
         let events = tracker.update(&frame(&[(1, true, 0.22, 0.3)]), 45 * MS);
         assert_eq!(
-            events.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.22, y: 0.3 }]);
+            events.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.22, y: 0.3, at_ns: 45 * MS }]);
         assert_eq!(tracker.active_count(), 1);
     }
 
@@ -508,26 +561,62 @@ mod tests {
         assert!(tracker.update(&frame(&[(1, false, 0.21, 0.3)]), 10 * MS).is_empty());
         assert!(tracker.expire(59 * MS).is_empty());
         assert_eq!(
-            tracker.expire(60 * MS).as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3 }]);
+            tracker.expire(60 * MS).as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0 }]);
         assert_eq!(tracker.active_count(), 0);
     }
 
-    // The other way round: as long as lift reports keep coming the finger may still be down.
-    // They stop being believed at the debounce, 250 ms (measured: a finger whose tip came back
-    // 194 ms after the lift report, the panel having misread it twice in between).
+    // The other way round: as long as lift reports keep coming the finger may still be down,
+    // and nothing ends the touch sooner. For a finger that was standing still they are believed
+    // for 150 ms (measured, 2026-11-24 to 2026-11-26: the panel had such a finger back within
+    // 106 ms, and a second tap landed 172 ms after the first one's lift report)...
     #[test]
-    fn a_run_of_lift_reports_is_a_lift_at_the_debounce() {
+    fn a_run_of_lift_reports_on_a_still_finger_is_a_lift_at_150_ms() {
         let mut tracker = ContactTracker::default();
         let _ = tracker.update(&frame(&[(1, true, 0.2, 0.3)]), 0);
         assert!(tracker.update(&frame(&[(1, false, 0.21, 0.3)]), 10 * MS).is_empty());
-        for at in [50, 130, 210, 249] {
+        for at in [50, 130, 159] {
             assert!(tracker.update(&frame(&[(1, false, 0.21, 0.3)]), at * MS).is_empty(), "{at} ms");
         }
         assert_eq!(
-            tracker.update(&frame(&[(1, false, 0.21, 0.3)]), 260 * MS).as_slice(),
-            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3 }]
+            tracker.update(&frame(&[(1, false, 0.21, 0.3)]), 160 * MS).as_slice(),
+            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0 }]
         );
         assert_eq!(tracker.active_count(), 0);
+    }
+
+    // ...and for one that was moving for the whole debounce, 250 ms (measured: a finger whose tip
+    // came back 194 ms after the lift report, the panel having misread it twice in between, and
+    // one back in 211 ms, 2026-11-26).
+    #[test]
+    fn a_run_of_lift_reports_on_a_moving_finger_is_a_lift_at_the_debounce() {
+        let mut tracker = ContactTracker::default();
+        let _ = tracker.update(&frame(&[(1, true, 0.2, 0.3)]), 0);
+        let _ = tracker.update(&frame(&[(1, true, 0.21, 0.3)]), 17 * MS);
+        assert!(tracker.update(&frame(&[(1, false, 0.21, 0.3)]), 34 * MS).is_empty());
+        for at in [74, 114, 154, 194, 234, 274] {
+            assert!(tracker.update(&frame(&[(1, false, 0.21, 0.3)]), at * MS).is_empty(), "{at} ms");
+        }
+        assert_eq!(
+            tracker.update(&frame(&[(1, false, 0.21, 0.3)]), 284 * MS).as_slice(),
+            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.21, y: 0.3, at_ns: 17 * MS }]
+        );
+        assert_eq!(tracker.active_count(), 0);
+    }
+
+    // Two taps 212 ms apart with the panel chattering between them (title-bar 2026-11-25,
+    // 12.149 s): held for the whole debounce, the second tap was taken for the first one's finger
+    // coming back, and the two were one touch long enough to right-click.
+    #[test]
+    fn a_second_tap_after_the_shorter_hold_is_its_own_contact() {
+        let mut tracker = ContactTracker::default();
+        let _ = tracker.update(&frame(&[(1, true, 0.4, 0.25)]), 0);
+        assert!(tracker.update(&frame(&[(1, false, 0.4, 0.25)]), 300 * MS).is_empty());
+        for at in [340, 390, 440, 500] {
+            tracker.heard(at * MS);
+        }
+        let events = tracker.update(&frame(&[(1, true, 0.406, 0.27)]), 512 * MS);
+        let phases: Vec<ContactPhase> = events.iter().map(|e| e.phase).collect();
+        assert_eq!(phases, vec![ContactPhase::Ended, ContactPhase::Began]);
     }
 
     // A finger misread on its way back (probe 2026-11-25 6.458 s): the lift report, two frames
@@ -549,24 +638,78 @@ mod tests {
         }
         assert_eq!(
             tracker.update(&frame(&[(1, true, 0.224, 0.3)]), 228 * MS).as_slice(),
-            [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.224, y: 0.3 }]
+            [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.224, y: 0.3, at_ns: 228 * MS }]
         );
         assert_eq!(tracker.active_count(), 1);
     }
 
-    // Once the finger has left, the JN-MD-IPST105FP reports the tip off at (0, 0). That report
-    // is the lift, whatever the debounce: nothing else sends it.
+    // A drag cut short by its own lift reports at the origin (owner's recording 2026-11-26,
+    // 43.428 s): the finger moving fast to the left, three reports from the origin, a frame
+    // somewhere else that the jump filter holds, and the finger 139 ms after it was last seen,
+    // where it was heading. Until 2026-11-26 the first report from the origin ended the contact
+    // there and then, and the window was let go 54 ms into the drag.
     #[test]
-    fn a_lift_report_at_the_panel_s_origin_is_the_lift_at_once() {
+    fn lift_reports_at_the_panel_s_origin_do_not_end_a_drag_in_motion() {
+        let mut tracker = ContactTracker::default();
+        let _ = tracker.update(&frame(&[(1, true, 0.27, 0.08)]), 0);
+        let _ = tracker.update(&frame(&[(1, true, 0.25, 0.08)]), 17 * MS);
+        let _ = tracker.update(&frame(&[(1, true, 0.23, 0.08)]), 34 * MS);
+        for at in [51, 68, 85] {
+            assert!(tracker.update(&frame(&[(1, false, 0.0, 0.0)]), at * MS).is_empty(), "{at} ms");
+        }
+        assert!(tracker.expire(110 * MS).is_empty());
+        assert_eq!(
+            tracker.update(&frame(&[(1, true, 0.18, 0.08)]), 173 * MS).as_slice(),
+            [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.18, y: 0.08, at_ns: 173 * MS }]
+        );
+        assert_eq!(tracker.active_count(), 1);
+        // The finger goes on, then leaves: the drag ends 50 ms after the panel's last report.
+        let _ = tracker.update(&frame(&[(1, true, 0.15, 0.08)]), 190 * MS);
+        assert!(tracker.update(&frame(&[(1, false, 0.15, 0.08)]), 207 * MS).is_empty());
+        assert_eq!(tracker.next_deadline_ns(), Some(257 * MS));
+        assert_eq!(
+            tracker.expire(257 * MS).as_slice(),
+            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.15, y: 0.08, at_ns: 190 * MS }]
+        );
+    }
+
+    // Once the finger has left, the JN-MD-IPST105FP reports the tip off where it was and, a
+    // frame or more later, from its origin. The two together are the lift, whatever the hold: a
+    // second tap 212 ms after the first one's lift report was otherwise taken for the first one's
+    // finger coming back (title-bar 2026-11-25, 12.149 s), and a slow press 103 ms after a tap's
+    // for the tap's (probe 2026-11-24 17:20, 4.254 s).
+    #[test]
+    fn a_lift_report_at_the_panel_s_origin_after_one_from_the_finger_is_the_lift_at_once() {
         let mut tracker = ContactTracker::default();
         let _ = tracker.update(&frame(&[(1, true, 0.2, 0.3)]), 0);
         assert!(tracker.update(&frame(&[(1, false, 0.2, 0.3)]), 10 * MS).is_empty());
         assert_eq!(
             tracker.update(&frame(&[(1, false, 0.0, 0.0)]), 27 * MS).as_slice(),
-            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3 }]
+            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0 }]
         );
         assert_eq!(tracker.active_count(), 0);
         assert!(tracker.update(&frame(&[(1, false, 0.0, 0.0)]), 44 * MS).is_empty());
+    }
+
+    // A lift report from somewhere else than the finger (the panel closing a touch of its own)
+    // is held for when it came, and does not make a later report from the origin final: the
+    // finger was never reported lifted where it is.
+    #[test]
+    fn a_lift_report_from_elsewhere_does_not_count_as_the_finger_s() {
+        let mut tracker = ContactTracker::default();
+        let _ = tracker.update(&frame(&[(1, true, 0.2, 0.3)]), 0);
+        assert!(tracker.update(&frame(&[(1, false, 0.9, 0.3)]), 10 * MS).is_empty());
+        assert!(tracker.update(&frame(&[(1, false, 0.0, 0.0)]), 27 * MS).is_empty());
+        assert!(tracker.update(&frame(&[(1, false, 0.0, 0.0)]), 44 * MS).is_empty());
+        assert_eq!(tracker.next_deadline_ns(), Some(94 * MS)); // the silence after it
+        for at in [100, 140] {
+            tracker.heard(at * MS);
+        }
+        assert_eq!(tracker.next_deadline_ns(), Some(160 * MS)); // the hold of a finger that stood still
+        assert_eq!(
+            tracker.expire(160 * MS).as_slice(),
+            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0 }]
+        );
     }
 
     // Frame times come from the panel's reports and the expiry from the pipeline's own clock.
@@ -580,7 +723,7 @@ mod tests {
         assert!(tracker.expire(159 * MS).is_empty());
         assert_eq!(
             tracker.expire(160 * MS).as_slice(),
-            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3 }]
+            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 100 * MS }]
         );
         assert_eq!(tracker.active_count(), 0);
     }
@@ -597,7 +740,7 @@ mod tests {
         }
         assert_eq!(
             tracker.update(&frame(&[(1, true, 0.23, 0.3)]), 167 * MS).as_slice(),
-            [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.23, y: 0.3 }]
+            [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.23, y: 0.3, at_ns: 167 * MS }]
         );
         assert_eq!(tracker.active_count(), 1);
     }
@@ -614,7 +757,7 @@ mod tests {
         tracker.heard(90 * MS);
         assert!(tracker.expire(139 * MS).is_empty());
         assert_eq!(
-            tracker.expire(140 * MS).as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3 }]
+            tracker.expire(140 * MS).as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0 }]
         );
     }
 
@@ -629,7 +772,7 @@ mod tests {
         assert!(tracker.expire(timeout - 1).is_empty());
         assert_eq!(
             tracker.expire(timeout).as_slice(),
-            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3 }]
+            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 20 * MS }]
         );
         assert_eq!(tracker.next_deadline_ns(), None);
 
@@ -638,11 +781,11 @@ mod tests {
         assert_eq!(tracker.next_deadline_ns(), Some(260 * MS)); // the silence after the lift report
         tracker.heard(230 * MS);
         assert_eq!(tracker.next_deadline_ns(), Some(280 * MS));
-        let _ = tracker.update(&frame(&[(1, false, 0.0, 0.0)]), 240 * MS);
+        let _ = tracker.update(&frame(&[(1, false, 0.0, 0.0)]), 240 * MS); // after the finger's own: the lift
         assert_eq!(tracker.next_deadline_ns(), None);
 
         // A lift report every 40 ms keeps the silence from lasting: the debounce is the deadline.
-        let mut tracker = ContactTracker::new(100 * MS, 150 * MS, 15.0, 0.75, 221.9, 147.9);
+        let mut tracker = ContactTracker::new(100 * MS, 150 * MS, 150 * MS, 15.0, 0.75, 221.9, 147.9);
         let _ = tracker.update(&frame(&[(1, true, 0.2, 0.3)]), 0);
         for at in [10, 50, 90, 130] {
             let _ = tracker.update(&frame(&[(1, false, 0.2, 0.3)]), at * MS);
@@ -662,7 +805,7 @@ mod tests {
         let _ = tracker.update(&frame(&[]), 34 * MS);
         let events = tracker.update(&frame(&[]), 634 * MS);
         assert_eq!(
-            events.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.22, y: 0.3 }]);
+            events.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.22, y: 0.3, at_ns: 17 * MS }]);
         assert_eq!(tracker.active_count(), 0);
     }
 
@@ -676,9 +819,9 @@ mod tests {
         let _ = tracker.update(&frame(&[]), 34 * MS);
         let adopted = tracker.update(&frame(&[(7, true, 0.24, 0.3)]), 45 * MS); // 11 ms later, renumbered
         assert_eq!(
-            adopted.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.24, y: 0.3 }]);
+            adopted.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.24, y: 0.3, at_ns: 45 * MS }]);
         let next = tracker.update(&frame(&[(7, true, 0.26, 0.3)]), 62 * MS);
-        assert_eq!(next.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.26, y: 0.3 }]);
+        assert_eq!(next.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.26, y: 0.3, at_ns: 62 * MS }]);
         assert_eq!(tracker.active_count(), 1);
     }
 

@@ -684,12 +684,15 @@ impl GestureRecognizer {
                     ContactPhase::Ended => {
                         // Taps and long-presses land where the finger rested, not where it first
                         // touched: touchdown wobbles on glass, the resting point is what the user
-                        // aimed.
+                        // aimed. And they are judged at the moment the finger was last seen: the
+                        // tracker holds a lift report for as much as 250 ms while the panel
+                        // chatters, and that time is no finger's (owner's recording 2026-11-26,
+                        // 10.954 s: a tap of 233 ms, so held, was a long press).
                         self.state = if self.active.is_empty() { State::Idle } else { State::Ignoring };
-                        if now - down_ns >= self.config.long_press_ns {
+                        if event.at_ns.saturating_sub(down_ns) >= self.config.long_press_ns {
                             smallvec![GestureAction::RightClick { at: point }]
                         } else {
-                            smallvec![self.tap(point, now)]
+                            smallvec![self.tap(point, event.at_ns)]
                         }
                     }
                 }
@@ -1442,14 +1445,15 @@ mod tests {
         mm / GestureConfig::default().panel_height_mm
     }
 
+    // The events carry no time of their own: `Script::at` dates each with the moment it feeds it.
     fn began(id: u8, x: f64, y: f64) -> ContactEvent {
-        ContactEvent { id, phase: ContactPhase::Began, x, y }
+        ContactEvent { id, phase: ContactPhase::Began, x, y, at_ns: 0 }
     }
     fn moved(id: u8, x: f64, y: f64) -> ContactEvent {
-        ContactEvent { id, phase: ContactPhase::Moved, x, y }
+        ContactEvent { id, phase: ContactPhase::Moved, x, y, at_ns: 0 }
     }
     fn ended(id: u8, x: f64, y: f64) -> ContactEvent {
-        ContactEvent { id, phase: ContactPhase::Ended, x, y }
+        ContactEvent { id, phase: ContactPhase::Ended, x, y, at_ns: 0 }
     }
 
     /// The Swift `Script`: a recognizer plus every action it has produced.
@@ -1474,7 +1478,8 @@ mod tests {
             Self::build(OneFingerDragMode::ClickAndDrag, configure)
         }
         fn at(&mut self, t_ms: u64, events: &[ContactEvent]) {
-            self.actions.extend(self.recognizer.handle(events, t_ms * MS));
+            let events: Vec<ContactEvent> = events.iter().map(|event| ContactEvent { at_ns: t_ms * MS, ..*event }).collect();
+            self.actions.extend(self.recognizer.handle(&events, t_ms * MS));
         }
     }
 
@@ -1569,6 +1574,34 @@ mod tests {
         assert!(s.actions.is_empty());
         s.at(900, &[ended(0, 0.4 + mm_x(1.0), 0.4)]);
         assert_eq!(s.actions, [GestureAction::RightClick { at: PanelPoint::new(0.4 + mm_x(1.0), 0.4) }]);
+    }
+
+    // Owner's recording 2026-11-26, 10.954 s: a tap of 233 ms, whose lift report the tracker held
+    // for 250 ms while the panel went on reporting. Counted to the moment the contact ended, it
+    // had lasted long enough to be a long press, and a context menu opened.
+    #[test]
+    fn a_tap_is_judged_by_how_long_the_finger_was_down_not_by_how_long_its_lift_was_held() {
+        let mut s = Script::new();
+        s.at(0, &[began(0, 0.4, 0.4)]);
+        let held = ContactEvent { at_ns: 233 * MS, ..ended(0, 0.402, 0.4) };
+        s.actions.extend(s.recognizer.handle(&[held], 713 * MS));
+        assert_eq!(s.actions, [GestureAction::Tap { at: PanelPoint::new(0.402, 0.4), count: 1 }]);
+    }
+
+    // Two taps 667 ms apart to the finger, the first one's lift report held for 480 ms: delivered,
+    // they are 437 ms apart. Counted by the clock they were delivered on, they would be a
+    // double-click; the fingers were not.
+    #[test]
+    fn taps_are_counted_from_when_the_finger_was_there() {
+        let mut s = Script::new();
+        s.at(0, &[began(0, 0.4, 0.4)]);
+        let first = ContactEvent { at_ns: 233 * MS, ..ended(0, 0.402, 0.4) };
+        s.actions.extend(s.recognizer.handle(&[first], 713 * MS));
+        s.at(800, &[began(0, 0.404, 0.401)]);
+        let second = ContactEvent { at_ns: 900 * MS, ..ended(0, 0.404, 0.401) };
+        s.actions.extend(s.recognizer.handle(&[second], 1150 * MS));
+        let counts: Vec<u32> = s.actions.iter().map(|a| match a { GestureAction::Tap { count, .. } => *count, _ => 0 }).collect();
+        assert_eq!(counts, [1, 1]);
     }
 
     #[test]

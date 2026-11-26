@@ -59,8 +59,9 @@ fn hex_of(line: &str) -> &str {
 struct Contact {
     began_ns: u64,
     began: (f64, f64),
-    /// The position of its last frame with the tip down.
+    /// The position and time of its last frame with the tip down.
     last: (f64, f64),
+    last_ns: u64,
     /// How many frames of the tip down it had.
     frames: usize,
     ended_ns: u64,
@@ -105,6 +106,7 @@ fn replay(source: &str, panel: (f64, f64), config: GestureConfig) -> Replay {
                         began_ns: at_ns,
                         began: (event.x, event.y),
                         last: (event.x, event.y),
+                        last_ns: at_ns,
                         frames: 1,
                         ended_ns: 0,
                         ended: (event.x, event.y),
@@ -115,6 +117,7 @@ fn replay(source: &str, panel: (f64, f64), config: GestureConfig) -> Replay {
                         .get(&event.id)
                         .unwrap_or_else(|| panic!("contact {} moved before it began at {at_ns} ns", event.id))];
                     contact.last = (event.x, event.y);
+                    contact.last_ns = at_ns;
                     contact.frames += 1;
                 }
                 ContactPhase::Ended => {
@@ -257,9 +260,10 @@ fn no_tap_lands_at_the_panels_origin() {
 const TITLE_BAR: &str = include_str!("../../../../Tests/TouchCoreTests/Fixtures/title-bar-2026-11-25.jsonl");
 const SECOND: u64 = 1_000_000_000;
 
-fn title_bar() -> Replay {
+/// A recording with the settings the owner's Mac had: one finger scrolls, no three-finger drag.
+fn scrolling(source: &str) -> Replay {
     replay(
-        TITLE_BAR,
+        source,
         (221.9, 147.9),
         GestureConfig {
             one_finger_drag: OneFingerDragMode::Scroll,
@@ -347,4 +351,82 @@ fn a_window_drag_is_one_contact_through_the_panels_flaps_and_misreads() {
         .filter(|(at_ns, _)| *at_ns >= 8 * SECOND + 450_000_000 && *at_ns <= 11 * SECOND + 700_000_000)
         .map(|(_, action)| action);
     assert_eq!(balanced(during)["scroll"], 1, "{}", describe(&replay));
+}
+
+fn title_bar() -> Replay {
+    scrolling(TITLE_BAR)
+}
+
+// origin-reports-2026-11-26 holds 44 s on the JN-MD-IPST105FP as its owner tapped, scrolled and
+// dragged a window by its title bar: 521 frames with the tip down and 129 tip-off reports, 35 of
+// them from the panel's origin. Owner, 2026-11-26, on the build that ended a touch at the first
+// report from the origin: "it is still hard to touch/grab, now the telegram window just goes full
+// screen". That build let go of both drags at such a report (5.540 s and 43.445 s), and held a
+// tap's lift report for as long as the panel went on reporting after it.
+
+const ORIGIN_REPORTS: &str = include_str!("../../../../Tests/TouchCoreTests/Fixtures/origin-reports-2026-11-26.jsonl");
+
+#[test]
+fn a_slow_drag_survives_ten_lift_reports_from_the_panels_origin() {
+    // 3.7 s to 7.1 s: a window dragged along its title bar and down. At 5.487 s the panel
+    // reported the tip off, took the finger back 37 ms later, and at 5.540 s reported the tip
+    // off from its origin ten times over 159 ms. The finger was down all along: it was back at
+    // 5.751 s, 12 mm on, and went on dragging until 6.9 s.
+    let replay = scrolling(ORIGIN_REPORTS);
+    let drag = touches(&replay, 3 * SECOND + 700_000_000, 7 * SECOND + 300_000_000);
+    assert_eq!(drag.len(), 1, "{}", describe(&replay));
+    assert!(drag[0].ended_ns > 7 * SECOND, "{}", describe(&replay));
+    assert!(drag[0].frames > 120, "{}", describe(&replay));
+}
+
+#[test]
+fn a_fast_drag_is_let_go_where_its_finger_stopped_and_leaves_no_taps() {
+    // 43.3 s to the end: a swipe to the left along a title bar, 38 mm in 125 ms. The panel then
+    // reported its origin three times and eight other places, and the finger three times more,
+    // the last 11 mm from the panel's left edge. Let go at the first report from the origin, the
+    // drag lasted 54 ms and the finger's last two places were delivered as taps.
+    let replay = scrolling(ORIGIN_REPORTS);
+    let drag = touches(&replay, 43 * SECOND, u64::MAX);
+    assert_eq!(drag.len(), 1, "{}", describe(&replay));
+    assert!((drag[0].last.0 * 221.9 - 11.1).abs() < 3.0 && (drag[0].last.1 * 147.9 - 11.5).abs() < 3.0, "{}", describe(&replay));
+    assert!(!replay.actions.iter().any(|(at_ns, action)| *at_ns >= 43 * SECOND && matches!(action, GestureAction::Tap { .. })), "{}", describe(&replay));
+}
+
+#[test]
+fn a_tap_the_panel_keeps_talking_after_is_a_tap_and_is_soon() {
+    // 10.917 s: a tap of 233 ms at (123, 85) mm, after which the panel reported other places on
+    // the finger's row for half a second and then the tip off. Held from its lift report to the
+    // end of that, the touch had lasted 750 ms, and a long press opened a context menu.
+    let replay = scrolling(ORIGIN_REPORTS);
+    let taps = touches(&replay, 10 * SECOND + 900_000_000, 11 * SECOND);
+    assert_eq!(taps.len(), 1, "{}", describe(&replay));
+    assert!(taps[0].ended_ns - taps[0].last_ns < 300_000_000, "{}", describe(&replay));
+    let during: Vec<&GestureAction> = replay.actions.iter().filter(|(at_ns, _)| (10 * SECOND + 900_000_000..12 * SECOND).contains(at_ns)).map(|(_, action)| action).collect();
+    assert_eq!(during.iter().filter(|action| matches!(action, GestureAction::Tap { .. })).count(), 1, "{}", describe(&replay));
+    assert!(during.iter().all(|action| !matches!(action, GestureAction::RightClick { .. })), "{}", describe(&replay));
+}
+
+#[test]
+fn the_taps_the_panel_chatters_after_are_held_no_longer_than_a_still_finger_comes_back() {
+    // Two taps the panel went on reporting after, with places of its own: 8.791 s and 29.940 s.
+    // The second is the one the owner meant for a title bar (it landed on a window's zoom button).
+    // Both are let go within 200 ms of their last frame; held for the whole debounce and by the
+    // panel's own places near the finger, the first took 460 ms.
+    let replay = scrolling(ORIGIN_REPORTS);
+    for (from_ms, x_mm) in [(8_700, 118.9), (29_900, 152.7)] {
+        let taps = touches(&replay, from_ms * 1_000_000, from_ms * 1_000_000 + 200_000_000);
+        assert_eq!(taps.len(), 1, "{from_ms} ms: {}", describe(&replay));
+        assert!((taps[0].began.0 * 221.9 - x_mm).abs() < 1.5, "{from_ms} ms: {}", describe(&replay));
+        assert!(taps[0].ended_ns - taps[0].last_ns < 200_000_000, "{from_ms} ms: {}", describe(&replay));
+    }
+}
+
+#[test]
+fn no_long_press_is_recognised_where_the_owner_made_none() {
+    let replay = scrolling(ORIGIN_REPORTS);
+    assert!(
+        !replay.actions.iter().any(|(_, action)| matches!(action, GestureAction::RightClick { .. })),
+        "{}",
+        describe(&replay)
+    );
 }

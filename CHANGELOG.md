@@ -33,15 +33,33 @@
   to is never taken for it on the panel's word alone, however long the panel keeps to it (it kept
   to one misread for seven frames); after fifteen such frames the finger is given up for lost. A
   new press is believed on its third frame, or on its second when its lift is reported.
-- **A lift report is held for longer, and ends the touch sooner on surer signs.** The tracker held
-  one for 60 ms at the most. It now holds it for 250 ms (measured: a finger whose tip came back
-  194 ms after its lift report) and ends the touch when the panel has then been quiet for 50 ms,
-  or at once when the report gives the panel's origin, which the panel sends once the finger is
-  gone. A tip back by then continues the press only within a finger's travel of where it was.
+- **A lift report is held for longer.** The tracker held one for 60 ms at the most. It now holds
+  it for 250 ms for a finger that was moving (measured: a finger whose tip came back 194 ms after
+  its lift report) and for 150 ms for one standing still (measured: back within 106 ms), and ends
+  the touch when the panel has then been quiet for 50 ms. A tip back by then continues the press
+  only within a finger's travel of where it was.
 - On the recording of that drag and those taps (31 s, 806 reports), the build before made 44
-  contacts, 27 taps and 11 scrolls; this one makes 22, 12 and 8. The three taps on a title bar are
-  three clicks there. Before, two of the five clicks in that time were on the desktop, 107 mm and
-  98 mm to the left of it.
+  contacts, 27 taps and 11 scrolls; the first of these two repairs made 22, 12 and 8, and this
+  one 22, 14 and 7. The three taps on a title bar are three clicks there. Before, two of the five
+  clicks in that time were on the desktop, 107 mm and 98 mm to the left of it.
+- **A lift report from the panel's origin no longer ends a touch, and a tap is judged while the
+  finger was there.** (2026-11-26) The first repair ended a touch at the first lift report that
+  gave the panel's origin, taking it for the panel saying the finger had left. The panel sends
+  that report before a finger lands and while one is still down and moving: in 44 s of the
+  owner's use (650 reports, 35 of them from the origin) it came in three bursts before a touch,
+  in three after one, and in the middle of both drags. Both drags were let go at it, 1.8 s and
+  54 ms in, and the rest of each came out as a scroll and as taps, the last of them 1 pt from a
+  window's minimize button. Owner, 2026-11-26: "it is still hard to touch/grab". The report is
+  held like any other now. It ends the touch at once only when a lift report from where the
+  finger was is already being held: the two together do say the finger has left. With every
+  report held and nothing more, a second tap 212 ms after the first one's lift report was taken
+  for the first one's finger coming back, and the two were one touch long enough to right-click.
+  The 150 ms hold for a still finger keeps a tap that the panel goes on reporting after from
+  waiting 250 ms or, on the panel's own places near the finger, 460 ms. And the recognizer
+  judges a tap and a long press by the time the finger was last seen: the time the tracker held
+  the lift report was counted into the touch, so a tap of 233 ms followed by half a second of
+  the panel's own reports was 750 ms long. Replayed, that recording makes the build before one
+  long press and this one none.
 - **The drag grace is off.** The Swift build, and the port until now, held each drag's press for
   1.2 s after the lift and resumed the drag when a touch came near. The tracker now carries a
   contact through the panel's tip flaps, so a lift that reaches the recognizer is one, and the

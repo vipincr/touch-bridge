@@ -24,8 +24,9 @@ struct Finger {
 }
 
 /// The speed of a finger that is standing still: the panel's reports of one wander by up to
-/// 0.7 mm a frame.
-const REST_SPEED_MM_S: f64 = 50.0;
+/// 0.7 mm a frame. [`crate::tracker::ContactTracker`] holds a lift report for less time for a
+/// finger this slow.
+pub(crate) const REST_SPEED_MM_S: f64 = 50.0;
 
 /// Position repair for the single-contact stream a WCH panel sends while in mouse
 /// emulation, the only touch data available until the digitizer-mode switch takes hold.
