@@ -56,7 +56,10 @@ fn hex_of(line: &str) -> &str {
 /// and when and where it ended. Positions are in units of the panel; times are nanoseconds into
 /// the recording.
 struct Contact {
+    /// When the stream announced the contact.
     began_ns: u64,
+    /// When its first frame came: the stream dates a touch it held from then.
+    landed_ns: u64,
     began: (f64, f64),
     /// The position and time of its last frame with the tip down.
     last: (f64, f64),
@@ -66,6 +69,8 @@ struct Contact {
     ended_ns: u64,
     /// The position its end event names.
     ended: (f64, f64),
+    /// The stream's verdict: the touch was the panel's misread of the landing that followed it.
+    misread: bool,
 }
 
 /// What a recording became: its contacts, and the recognizer's actions with the time of the
@@ -103,12 +108,14 @@ fn replay(source: &str, panel: (f64, f64), config: GestureConfig) -> Replay {
                     open.insert(event.id, replay.contacts.len());
                     replay.contacts.push(Contact {
                         began_ns: at_ns,
+                        landed_ns: event.at_ns,
                         began: (event.x, event.y),
                         last: (event.x, event.y),
                         last_ns: at_ns,
                         frames: 1,
                         ended_ns: 0,
                         ended: (event.x, event.y),
+                        misread: false,
                     });
                 }
                 ContactPhase::Moved => {
@@ -126,6 +133,7 @@ fn replay(source: &str, panel: (f64, f64), config: GestureConfig) -> Replay {
                     let contact = &mut replay.contacts[index];
                     contact.ended_ns = at_ns;
                     contact.ended = (event.x, event.y);
+                    contact.misread = event.misread;
                 }
             }
         }
@@ -198,6 +206,11 @@ fn balanced<'a>(actions: impl IntoIterator<Item = &'a GestureAction>) -> BTreeMa
     }
     assert!(open.is_none(), "{} still open at the end", open.unwrap_or("nothing"));
     histogram
+}
+
+/// A time to a tenth of a millisecond: what the replays are stated in.
+fn tenths(ns: u64) -> i64 {
+    ((ns + 50_000) / 100_000) as i64
 }
 
 const M1_PROBE: &str = include_str!("fixtures/probe-session-1.jsonl");
@@ -392,17 +405,31 @@ fn a_fast_drag_is_let_go_where_its_finger_stopped_and_leaves_no_taps() {
 }
 
 #[test]
-fn a_tap_the_panel_keeps_talking_after_is_a_tap_and_is_soon() {
+fn a_tap_the_panel_keeps_talking_after_is_let_go_soon_and_is_no_long_press() {
     // 10.917 s: a tap of 233 ms at (123, 85) mm, after which the panel reported other places on
     // the finger's row for half a second and then the tip off. Held from its lift report to the
-    // end of that, the touch had lasted 750 ms, and a long press opened a context menu.
+    // end of that, the touch had lasted 750 ms, and a long press opened a context menu. It is
+    // let go within 300 ms of its last frame, and is no long press.
+    //
+    // Not a tap either. The panel's first sweep after it runs from 12 mm right of the finger
+    // back to where it lifted, and ends in a lift report from there: the stream takes it for the
+    // finger, and the touch is last seen 529 ms after it landed, 4.7 mm from where. A finger that
+    // was that far from where it landed before the long-press time is a nudge (gestures.rs), so
+    // the lift scrolls by those 4.7 mm and clicks nothing. The build of the recording tapped: it
+    // counted the touch from its third frame, which made it 493 ms.
     let replay = scrolling(ORIGIN_REPORTS);
     let taps = touches(&replay, 10 * SECOND + 900_000_000, 11 * SECOND);
     assert_eq!(taps.len(), 1, "{}", describe(&replay));
     assert!(taps[0].ended_ns - taps[0].last_ns < 300_000_000, "{}", describe(&replay));
     let during: Vec<&GestureAction> = replay.actions.iter().filter(|(at_ns, _)| (10 * SECOND + 900_000_000..12 * SECOND).contains(at_ns)).map(|(_, action)| action).collect();
-    assert_eq!(during.iter().filter(|action| matches!(action, GestureAction::Tap { .. })).count(), 1, "{}", describe(&replay));
-    assert!(during.iter().all(|action| !matches!(action, GestureAction::RightClick { .. })), "{}", describe(&replay));
+    assert!(
+        during.iter().all(|action| !matches!(action, GestureAction::Tap { .. } | GestureAction::RightClick { .. })),
+        "{}",
+        describe(&replay)
+    );
+    // Its lift is one scroll, of 4.7 mm, opened and closed at once.
+    let lift: Vec<&GestureAction> = replay.actions.iter().filter(|(at_ns, _)| (10 * SECOND + 900_000_000..11 * SECOND + 800_000_000).contains(at_ns)).map(|(_, action)| action).collect();
+    assert_eq!(balanced(lift)["scroll"], 1, "{}", describe(&replay));
 }
 
 #[test]
@@ -502,14 +529,19 @@ fn the_nudges_are_six_scrolls_and_a_tap() {
 // long-press-2026-11-26 holds 4.3 s of the owner's use at 20:54, after the panel had been away
 // from 19:17 to 20:52: a touch the panel reported at its bottom-right corner for 405 ms, a tap at
 // the left edge, and a finger held at the left edge for 3.6 s to right-click. In its last half
-// second the finger wandered along the edge to 5.9 mm from where it had landed.
+// second the finger wandered along the edge to 5.9 mm from where it had landed. The tap at the
+// left edge (0.422 s to 0.507 s, six frames, 17 ms after the corner touch's lift report) is let
+// go by the stream: that soon after a lift, a touch that far off waits for ten frames.
 
 const LONG_PRESS: &str = include_str!("fixtures/long-press-2026-11-26.jsonl");
 
 // short-nudge-2026-11-26 holds 7 s of the owner's use at 21:19, on the build of 21:11: a scroll up
-// a terminal from its left edge, a tap, the nudge below, and then the panel's storm along a row.
-// The nudge's finger rested 286 ms, crept 6.3 mm up in 280 ms and lifted at 563 ms: under the tap
-// slop and past the long-press time, and on that build a right-click.
+// a terminal from its left edge, a tap, the nudge below, a longer drag, a tap at the left edge and
+// a double-click at its bottom-left corner. The nudge's finger rested 354 ms, crept 0.7 mm, was
+// 5 mm up at 526 ms and lifted 87 ms later: under the tap slop and past the long-press time, and
+// on that build a right-click. After it the panel reported three frames of a touch 180 mm to the
+// right, closed by a lift report (a click at (2311, 691) on that build), and after the drag six
+// still frames 90 mm to the right of its last (a click at (1913, 724)).
 
 const SHORT_NUDGE: &str = include_str!("fixtures/short-nudge-2026-11-26.jsonl");
 
@@ -532,9 +564,9 @@ fn a_short_nudge_scrolls_on_lift() {
         "{}",
         describe(&replay)
     );
-    assert_eq!(replay.contacts.len(), 11, "{}", describe(&replay));
+    assert_eq!(replay.contacts.len(), 9, "{}", describe(&replay));
     let of = |name: &str| balanced(replay.actions.iter().map(|(_, action)| action)).get(name).copied().unwrap_or(0);
-    assert_eq!((of("scroll"), of("tap"), of("rightClick"), of("drag")), (3, 8, 0, 0));
+    assert_eq!((of("scroll"), of("tap"), of("rightClick"), of("drag")), (3, 6, 0, 0));
 }
 
 #[test]
@@ -553,4 +585,176 @@ fn a_finger_held_to_right_click_right_clicks_however_it_wanders_inside_the_slop(
         at.y * 147.9,
         describe(&replay)
     );
+}
+
+// storm-2026-11-26 holds 29 s of the owner's use at 22:03 on 2026-11-26: taps, scrolls, a drag by
+// a title bar and a double-click, and after nearly every lift the panel's storm. 1 056 reports,
+// 887 with the tip down and 64 of the 169 tip-off ones from the panel's origin. On the build of
+// the recording, which believed a still place on its fifth frame and a pair on its lift report,
+// it made 37 contacts, 18 taps, 18 scrolls and the drag: ten of the taps and two of the scrolls
+// were the storm's, and the drag it cut in two.
+// Owner, on that build: "it is still hard to touch/grab, now the telegram window just goes full
+// screen".
+
+const STORM: &str = include_str!("fixtures/storm-2026-11-26.jsonl");
+
+#[test]
+fn nothing_the_panel_reports_in_the_storm_after_a_lift_is_a_touch() {
+    // Where that build began contacts of the storm's: 3.861 s (eight still frames 118 mm from the
+    // lift, a click at (1563, 688)), 7.030 s and 7.466 s (a double click at (1597, 795)),
+    // 9.071 s (a click), 9.331 s (a scroll of 774 ms), 11.729 s and 11.974 s (clicks), 14.697 s
+    // (a click), 18.359 s (a scroll), 19.133 s (a click) and 22.276 s (a click).
+    let replay = scrolling(STORM);
+    for (from_ms, to_ms) in [
+        (3_600, 3_900),
+        (6_970, 7_600),
+        (9_000, 10_300),
+        (11_780, 12_200),
+        (14_600, 14_900),
+        (18_260, 18_680),
+        (19_210, 19_270),
+        (22_390, 23_000),
+    ] {
+        let begun = touches(&replay, from_ms * 1_000_000, to_ms * 1_000_000);
+        assert!(begun.is_empty(), "{from_ms} to {to_ms} ms: {}", describe(&replay));
+    }
+    assert_eq!(replay.contacts.len(), 25, "{}", describe(&replay));
+}
+
+#[test]
+fn a_touch_the_panel_misread_before_a_landing_is_no_click_and_no_cut_in_the_landing() {
+    // 2.007 s: three frames of a touch at (43, 21) mm and the tip off, then 15 ms after that
+    // report the finger landing 60 mm away and scrolling to (124, 26) mm. The three frames were
+    // a click at (1700, 404) just before the scroll.
+    let replay = scrolling(STORM);
+    let around = touches(&replay, 2 * SECOND, 3 * SECOND);
+    let [misread, scroll, drag] = around.as_slice() else {
+        panic!("three contacts from 2 s to 3 s: {}", describe(&replay));
+    };
+    assert!(misread.misread, "{}", describe(&replay));
+    assert_eq!((tenths(misread.began_ns), tenths(misread.ended_ns)), (20_440, 24_270), "{}", describe(&replay));
+    assert_eq!(tenths(scroll.began_ns), 24_270, "{}", describe(&replay));
+    assert!(!scroll.misread && !drag.misread, "{}", describe(&replay));
+    assert!(
+        !replay.actions.iter().any(|(at_ns, action)| (2 * SECOND..3 * SECOND).contains(at_ns) && matches!(action, GestureAction::Tap { .. })),
+        "{}",
+        describe(&replay)
+    );
+    // The scroll that follows is one, from where the finger landed to where it lifted.
+    let scroll_of = balanced(replay.actions.iter().filter(|(at_ns, _)| (24 * SECOND / 10..26 * SECOND / 10).contains(at_ns)).map(|(_, action)| action));
+    assert_eq!(scroll_of["scroll"], 1, "{}", describe(&replay));
+
+    // 2.759 s: a drag down the panel, landing 17 ms after a frame of the panel's and its lift
+    // report. The panel's frames inside its first 125 ms cut it in two on that build, at 3.042 s.
+    assert_eq!((tenths(drag.began_ns), tenths(drag.landed_ns), tenths(drag.ended_ns), drag.frames), (29_170, 27_590, 34_820, 27), "{}", describe(&replay));
+    let drags = replay.actions.iter().filter(|(at_ns, _)| (29 * SECOND / 10..35 * SECOND / 10).contains(at_ns)).map(|(_, action)| action);
+    assert_eq!(balanced(drags)["scroll"], 1, "{}", describe(&replay));
+}
+
+#[test]
+fn a_flick_that_lands_amid_the_storm_is_one_scroll_from_its_first_frame() {
+    // 3.889 s: a flick upward, landing 20 ms after a lift report of the panel's own. It is
+    // believed on its third frame, once it has crossed its row, with all of them and dated from
+    // the first. Before it, that build made a click of the still burst at (1563, 688).
+    let replay = scrolling(STORM);
+    let flick = touches(&replay, 39 * SECOND / 10, 40 * SECOND / 10);
+    assert_eq!(flick.len(), 1, "{}", describe(&replay));
+    assert_eq!((tenths(flick[0].began_ns), tenths(flick[0].landed_ns), tenths(flick[0].ended_ns), flick[0].frames), (39_220, 38_890, 41_690, 5), "{}", describe(&replay));
+    let during = replay.actions.iter().filter(|(at_ns, _)| (39 * SECOND / 10..42 * SECOND / 10).contains(at_ns)).map(|(_, action)| action);
+    let begun = balanced(during);
+    assert_eq!((begun.get("scroll").copied().unwrap_or(0), begun.get("tap").copied().unwrap_or(0)), (1, 0), "{}", describe(&replay));
+}
+
+#[test]
+fn the_storms_taps_are_gone_and_the_owners_are_whole() {
+    // Seven taps and a double-click, where that build made eighteen taps: at (2030, 652),
+    // (1933, 581), (2076, 572), (1837, 572), (1884, 616), (2150, 520) and twice at (1893, 491).
+    let replay = scrolling(STORM);
+    let taps: Vec<(i64, u32)> = replay
+        .actions
+        .iter()
+        .filter_map(|(at_ns, action)| match action {
+            GestureAction::Tap { count, .. } => Some((tenths(*at_ns), *count)),
+            _ => None,
+        })
+        .collect();
+    let expected = [
+        (105_030, 1),
+        (117_710, 1),
+        (123_870, 1),
+        (145_700, 1),
+        (158_170, 1),
+        (253_890, 1),
+        (287_550, 1),
+        (289_480, 2),
+    ];
+    assert_eq!(taps.len(), expected.len(), "{taps:?}: {}", describe(&replay));
+    for ((at, count), (want_at, want_count)) in taps.iter().zip(&expected) {
+        assert_eq!(*count, *want_count, "a tap at {at}: {}", describe(&replay));
+        assert!((at - want_at).abs() <= 1, "a tap at {at}, wanted {want_at}: {}", describe(&replay));
+    }
+    let of = |name: &str| balanced(replay.actions.iter().map(|(_, action)| action)).get(name).copied().unwrap_or(0);
+    assert_eq!((of("scroll"), of("tap"), of("rightClick"), of("drag")), (15, 8, 0, 1));
+}
+
+// garbled-drags-2026-11-27 holds 22 s of the owner's use at 00:21 on 2026-11-27, on the build of
+// 21:11: eight drags down a terminal, nine taps and a double-click. 620 reports, 554 with the tip
+// down. Around the drags the panel reported places of its own: after the first, four frames at
+// (17.8, 86.3) mm closed by a lift report and a sweep of eight; before the second, two at the
+// panel's left edge and one 12 mm from where the finger landed; after the fourth, eight still
+// frames at another place. On that build they were 21 contacts, 12 taps and 9 scrolls.
+
+const GARBLED: &str = include_str!("fixtures/garbled-drags-2026-11-27.jsonl");
+
+#[test]
+fn the_places_the_panel_reports_around_the_drags_are_no_touches() {
+    // After the first drag (0.388 s to 1.520 s): a click at (1568, 693) and a scroll of 180 ms on
+    // that build. After the fourth (7.481 s to 9.816 s): a click at (2128, 366).
+    let replay = scrolling(GARBLED);
+    for (from_ms, to_ms) in [(1_530, 2_020), (9_820, 10_170)] {
+        let begun = touches(&replay, from_ms * 1_000_000, to_ms * 1_000_000);
+        assert!(begun.is_empty(), "{from_ms} to {to_ms} ms: {}", describe(&replay));
+    }
+    assert_eq!(replay.contacts.len(), 18, "{}", describe(&replay));
+}
+
+#[test]
+fn each_drag_is_one_contact_whole() {
+    // How many frames each of the eight went out with.
+    let replay = scrolling(GARBLED);
+    let frames: Vec<usize> = replay.contacts.iter().filter(|contact| contact.frames >= 19).map(|contact| contact.frames).collect();
+    assert_eq!(frames, [27, 41, 45, 94, 46, 28, 31, 19], "{}", describe(&replay));
+    assert_eq!(balanced(replay.actions.iter().map(|(_, action)| action))["scroll"], 8, "{}", describe(&replay));
+}
+
+#[test]
+fn the_taps_of_the_garbled_drags_are_the_owners_and_the_double_click_is_counted() {
+    let replay = scrolling(GARBLED);
+    let taps: Vec<(i64, u32)> = replay
+        .actions
+        .iter()
+        .filter_map(|(at_ns, action)| match action {
+            GestureAction::Tap { count, .. } => Some((tenths(*at_ns), *count)),
+            _ => None,
+        })
+        .collect();
+    let expected = [
+        (2_630, 1),
+        (40_630, 1),
+        (126_700, 1),
+        (146_750, 1),
+        (174_000, 1),
+        (175_950, 2),
+        (192_840, 1),
+        (198_269, 1),
+        (210_409, 1),
+        (218_169, 1),
+    ];
+    assert_eq!(taps.len(), expected.len(), "{taps:?}: {}", describe(&replay));
+    for ((at, count), (want_at, want_count)) in taps.iter().zip(&expected) {
+        assert_eq!(*count, *want_count, "a tap at {at}: {}", describe(&replay));
+        assert!((at - want_at).abs() <= 1, "a tap at {at}, wanted {want_at}: {}", describe(&replay));
+    }
+    let of = |name: &str| balanced(replay.actions.iter().map(|(_, action)| action)).get(name).copied().unwrap_or(0);
+    assert_eq!((of("scroll"), of("tap"), of("rightClick"), of("drag")), (8, 10, 0, 0));
 }

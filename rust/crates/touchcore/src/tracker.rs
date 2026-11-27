@@ -20,6 +20,8 @@ pub enum ContactPhase {
 /// have been held back for some time (see [`ContactTracker`]). A tap or a long
 /// press is judged by how long the finger was there; the time the tracker
 /// waited to be sure it had gone is left out.
+///
+/// `misread` is set by [`crate::stream::ContactStream`], on the end of a contact only: the touch was the panel's misread of the landing that followed it, and is no click.
 // No Eq: coordinates are f64.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ContactEvent {
@@ -28,6 +30,7 @@ pub struct ContactEvent {
     pub x: f64,
     pub y: f64,
     pub at_ns: u64,
+    pub misread: bool,
 }
 
 /// How far a finger that is standing still is reported to wander between two
@@ -55,6 +58,12 @@ struct Press {
     last_at_ns: u64,
     /// Exponential average of speed, mm/s.
     speed: f64,
+}
+
+/// How far a finger that was going at `speed_mm_s` may have travelled `gap_ns` after it was last
+/// seen: `base_mm`, and the speed's length over the gap less the `gain` share it keeps.
+pub(crate) fn adoption_reach_mm(base_mm: f64, gain: f64, speed_mm_s: f64, gap_ns: u64) -> f64 {
+    base_mm + speed_mm_s * gap_ns as f64 / 1_000_000_000.0 * gain
 }
 
 /// Turns successive frames into began/moved/ended events per contact id: the
@@ -114,11 +123,11 @@ impl ContactTracker {
     /// standing still, ended by 50 ms of silence; a 15 mm adoption base at 0.75 speed gain; and
     /// the JN-MD-IPST105FP's 221.9 mm by 147.9 mm active area.
     const DEFAULT_LIFT_TIMEOUT_NS: u64 = 100_000_000;
-    const DEFAULT_DEBOUNCE_NS: u64 = 250_000_000;
+    pub(crate) const DEFAULT_DEBOUNCE_NS: u64 = 250_000_000;
     const DEFAULT_REST_DEBOUNCE_NS: u64 = 150_000_000;
     const DEFAULT_LIFT_SILENCE_NS: u64 = 50_000_000;
-    const DEFAULT_ADOPTION_BASE_MM: f64 = 15.0;
-    const DEFAULT_ADOPTION_SPEED_GAIN: f64 = 0.75;
+    pub(crate) const DEFAULT_ADOPTION_BASE_MM: f64 = 15.0;
+    pub(crate) const DEFAULT_ADOPTION_SPEED_GAIN: f64 = 0.75;
     const DEFAULT_PANEL_WIDTH_MM: f64 = 221.9;
     const DEFAULT_PANEL_HEIGHT_MM: f64 = 147.9;
 
@@ -257,7 +266,7 @@ impl ContactTracker {
             let key = self.alias.get(&contact.id).copied().unwrap_or(contact.id);
             match self.active.get(&key).copied() {
                 Some(previous) if previous.x != contact.x || previous.y != contact.y => {
-                    moved.push(ContactEvent { id: key, phase: ContactPhase::Moved, x: contact.x, y: contact.y, at_ns });
+                    moved.push(ContactEvent { id: key, phase: ContactPhase::Moved, x: contact.x, y: contact.y, at_ns, misread: false });
                 }
                 Some(_) => {}
                 None => {
@@ -267,7 +276,7 @@ impl ContactTracker {
                     if let Some(held) = self.pending.remove(&key) {
                         events.push(self.ended(key, &held.press));
                     }
-                    began.push(ContactEvent { id: key, phase: ContactPhase::Began, x: contact.x, y: contact.y, at_ns });
+                    began.push(ContactEvent { id: key, phase: ContactPhase::Began, x: contact.x, y: contact.y, at_ns, misread: false });
                 }
             }
             let previous = self
@@ -357,8 +366,20 @@ impl ContactTracker {
     /// How far a returning finger may have travelled over the gap: a base
     /// radius plus the press's speed over the gap.
     fn adoption_radius_mm(&self, press: &Press, gap_ns: u64) -> f64 {
-        self.adoption_base_mm
-            + press.speed * gap_ns as f64 / 1_000_000_000.0 * self.adoption_speed_gain
+        adoption_reach_mm(self.adoption_base_mm, self.adoption_speed_gain, press.speed, gap_ns)
+    }
+
+    /// How far from where it was the finger whose lift is held may have travelled by the time a
+    /// touch arrives at `at_ns`: the tracker takes such a touch for the same press. The widest of
+    /// the lifts held, or `None` when each is past its hold.
+    pub fn adoption_reach_mm(&self, at_ns: u64) -> Option<f64> {
+        self.pending.values().fold(None::<f64>, |reach, held| {
+            let gap_ns = at_ns.saturating_sub(held.lifted_at_ns);
+            (gap_ns <= self.hold_ns(&held.press)).then(|| {
+                let radius = self.adoption_radius_mm(&held.press, gap_ns);
+                Some(reach.map_or(radius, |reach| reach.max(radius)))
+            }).flatten()
+        })
     }
 
     /// Emits the lifts whose hold window has passed or that the panel went silent after, and
@@ -383,7 +404,7 @@ impl ContactTracker {
 
     /// The end of a contact: where its finger was, and when it was last seen.
     fn ended(&self, id: u8, press: &Press) -> ContactEvent {
-        ContactEvent { id, phase: ContactPhase::Ended, x: press.x, y: press.y, at_ns: press.last_at_ns }
+        ContactEvent { id, phase: ContactPhase::Ended, x: press.x, y: press.y, at_ns: press.last_at_ns, misread: false }
     }
 
     fn distance_mm(&self, contact: &Contact, press: &Press) -> f64 {
@@ -441,7 +462,7 @@ mod tests {
     fn first_touch_begins() {
         let mut tracker = ContactTracker::default();
         let events = tracker.update(&frame(&[(1, true, 0.2, 0.3)]), 0);
-        assert_eq!(events.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Began, x: 0.2, y: 0.3, at_ns: 0 }]);
+        assert_eq!(events.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Began, x: 0.2, y: 0.3, at_ns: 0, misread: false }]);
         assert_eq!(tracker.active_count(), 1);
     }
 
@@ -450,7 +471,7 @@ mod tests {
         let mut tracker = ContactTracker::default();
         let _ = tracker.update(&frame(&[(1, true, 0.2, 0.3)]), 0);
         assert_eq!(
-            tracker.update(&frame(&[(1, true, 0.25, 0.3)]), 8 * MS).as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.25, y: 0.3, at_ns: 8 * MS }]);
+            tracker.update(&frame(&[(1, true, 0.25, 0.3)]), 8 * MS).as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.25, y: 0.3, at_ns: 8 * MS, misread: false }]);
     }
 
     #[test]
@@ -467,7 +488,7 @@ mod tests {
     fn tip_off_ends_the_contact_where_the_finger_last_was() {
         let mut tracker = ContactTracker::new(100_000_000, 0, 0, 15.0, 0.75, 221.9, 147.9);
         let _ = tracker.update(&frame(&[(1, true, 0.2, 0.3)]), 0);
-        assert_eq!(tracker.update(&frame(&[(1, false, 0.0, 0.0)]), 8 * MS).as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0 }]);
+        assert_eq!(tracker.update(&frame(&[(1, false, 0.0, 0.0)]), 8 * MS).as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0, misread: false }]);
         assert_eq!(tracker.active_count(), 0);
     }
 
@@ -477,7 +498,7 @@ mod tests {
         let _ = tracker.update(&frame(&[(1, true, 0.2, 0.3), (2, true, 0.6, 0.6)]), 0);
         let events = tracker.update(&frame(&[(2, true, 0.6, 0.6)]), 8 * MS);
         assert_eq!(
-            events.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0 }]);
+            events.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0, misread: false }]);
         assert_eq!(tracker.active_count(), 1);
     }
 
@@ -493,7 +514,7 @@ mod tests {
         let _ = tracker.update(&frame(&[(1, true, 0.2, 0.3)]), 0);
         assert!(tracker.expire(50 * MS).is_empty());
         assert_eq!(
-            tracker.expire(150 * MS).as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0 }]);
+            tracker.expire(150 * MS).as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0, misread: false }]);
         assert_eq!(tracker.active_count(), 0);
     }
 
@@ -547,7 +568,7 @@ mod tests {
         let _ = tracker.update(&frame(&[(1, false, 0.21, 0.3)]), 10 * MS);
         let events = tracker.update(&frame(&[(1, true, 0.22, 0.3)]), 45 * MS);
         assert_eq!(
-            events.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.22, y: 0.3, at_ns: 45 * MS }]);
+            events.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.22, y: 0.3, at_ns: 45 * MS, misread: false }]);
         assert_eq!(tracker.active_count(), 1);
     }
 
@@ -561,7 +582,7 @@ mod tests {
         assert!(tracker.update(&frame(&[(1, false, 0.21, 0.3)]), 10 * MS).is_empty());
         assert!(tracker.expire(59 * MS).is_empty());
         assert_eq!(
-            tracker.expire(60 * MS).as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0 }]);
+            tracker.expire(60 * MS).as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0, misread: false }]);
         assert_eq!(tracker.active_count(), 0);
     }
 
@@ -579,7 +600,7 @@ mod tests {
         }
         assert_eq!(
             tracker.update(&frame(&[(1, false, 0.21, 0.3)]), 160 * MS).as_slice(),
-            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0 }]
+            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0, misread: false }]
         );
         assert_eq!(tracker.active_count(), 0);
     }
@@ -598,7 +619,7 @@ mod tests {
         }
         assert_eq!(
             tracker.update(&frame(&[(1, false, 0.21, 0.3)]), 284 * MS).as_slice(),
-            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.21, y: 0.3, at_ns: 17 * MS }]
+            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.21, y: 0.3, at_ns: 17 * MS, misread: false }]
         );
         assert_eq!(tracker.active_count(), 0);
     }
@@ -638,7 +659,7 @@ mod tests {
         }
         assert_eq!(
             tracker.update(&frame(&[(1, true, 0.224, 0.3)]), 228 * MS).as_slice(),
-            [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.224, y: 0.3, at_ns: 228 * MS }]
+            [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.224, y: 0.3, at_ns: 228 * MS, misread: false }]
         );
         assert_eq!(tracker.active_count(), 1);
     }
@@ -660,7 +681,7 @@ mod tests {
         assert!(tracker.expire(110 * MS).is_empty());
         assert_eq!(
             tracker.update(&frame(&[(1, true, 0.18, 0.08)]), 173 * MS).as_slice(),
-            [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.18, y: 0.08, at_ns: 173 * MS }]
+            [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.18, y: 0.08, at_ns: 173 * MS, misread: false }]
         );
         assert_eq!(tracker.active_count(), 1);
         // The finger goes on, then leaves: the drag ends 50 ms after the panel's last report.
@@ -669,7 +690,7 @@ mod tests {
         assert_eq!(tracker.next_deadline_ns(), Some(257 * MS));
         assert_eq!(
             tracker.expire(257 * MS).as_slice(),
-            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.15, y: 0.08, at_ns: 190 * MS }]
+            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.15, y: 0.08, at_ns: 190 * MS, misread: false }]
         );
     }
 
@@ -685,7 +706,7 @@ mod tests {
         assert!(tracker.update(&frame(&[(1, false, 0.2, 0.3)]), 10 * MS).is_empty());
         assert_eq!(
             tracker.update(&frame(&[(1, false, 0.0, 0.0)]), 27 * MS).as_slice(),
-            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0 }]
+            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0, misread: false }]
         );
         assert_eq!(tracker.active_count(), 0);
         assert!(tracker.update(&frame(&[(1, false, 0.0, 0.0)]), 44 * MS).is_empty());
@@ -708,7 +729,7 @@ mod tests {
         assert_eq!(tracker.next_deadline_ns(), Some(160 * MS)); // the hold of a finger that stood still
         assert_eq!(
             tracker.expire(160 * MS).as_slice(),
-            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0 }]
+            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0, misread: false }]
         );
     }
 
@@ -723,7 +744,7 @@ mod tests {
         assert!(tracker.expire(159 * MS).is_empty());
         assert_eq!(
             tracker.expire(160 * MS).as_slice(),
-            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 100 * MS }]
+            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 100 * MS, misread: false }]
         );
         assert_eq!(tracker.active_count(), 0);
     }
@@ -740,7 +761,7 @@ mod tests {
         }
         assert_eq!(
             tracker.update(&frame(&[(1, true, 0.23, 0.3)]), 167 * MS).as_slice(),
-            [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.23, y: 0.3, at_ns: 167 * MS }]
+            [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.23, y: 0.3, at_ns: 167 * MS, misread: false }]
         );
         assert_eq!(tracker.active_count(), 1);
     }
@@ -757,7 +778,7 @@ mod tests {
         tracker.heard(90 * MS);
         assert!(tracker.expire(139 * MS).is_empty());
         assert_eq!(
-            tracker.expire(140 * MS).as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0 }]
+            tracker.expire(140 * MS).as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 0, misread: false }]
         );
     }
 
@@ -772,7 +793,7 @@ mod tests {
         assert!(tracker.expire(timeout - 1).is_empty());
         assert_eq!(
             tracker.expire(timeout).as_slice(),
-            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 20 * MS }]
+            [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.2, y: 0.3, at_ns: 20 * MS, misread: false }]
         );
         assert_eq!(tracker.next_deadline_ns(), None);
 
@@ -805,7 +826,7 @@ mod tests {
         let _ = tracker.update(&frame(&[]), 34 * MS);
         let events = tracker.update(&frame(&[]), 634 * MS);
         assert_eq!(
-            events.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.22, y: 0.3, at_ns: 17 * MS }]);
+            events.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Ended, x: 0.22, y: 0.3, at_ns: 17 * MS, misread: false }]);
         assert_eq!(tracker.active_count(), 0);
     }
 
@@ -819,9 +840,9 @@ mod tests {
         let _ = tracker.update(&frame(&[]), 34 * MS);
         let adopted = tracker.update(&frame(&[(7, true, 0.24, 0.3)]), 45 * MS); // 11 ms later, renumbered
         assert_eq!(
-            adopted.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.24, y: 0.3, at_ns: 45 * MS }]);
+            adopted.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.24, y: 0.3, at_ns: 45 * MS, misread: false }]);
         let next = tracker.update(&frame(&[(7, true, 0.26, 0.3)]), 62 * MS);
-        assert_eq!(next.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.26, y: 0.3, at_ns: 62 * MS }]);
+        assert_eq!(next.as_slice(), [ContactEvent { id: 1, phase: ContactPhase::Moved, x: 0.26, y: 0.3, at_ns: 62 * MS, misread: false }]);
         assert_eq!(tracker.active_count(), 1);
     }
 

@@ -74,7 +74,7 @@
   click of a 10 mm drag in the multi-finger probe (18.097 s). With the slop flat, a report of the
   panel's is judged where it leaves the finger. After the tap at 10.917 s of the 44 s recording
   the tracker passed on two places of the panel's, in one report each: 8 mm out and 7.5 mm back,
-  then 12 mm the other way and 6 mm back. Judged on each place, that tap scrolled; it is a tap.
+  then 12 mm the other way and 6 mm back. Judged on each place, that tap scrolled; judged where the report leaves the finger, it tapped again (it is a scroll of 4.7 mm on its lift since 2026-11-27: see "What the storm's rule costs").
   A finger held 3.6 s to right-click later that evening, at the panel's left edge, wandered 5 mm
   along it as it lifted, and is a right-click still (long-press-2026-11-26).
 - **A nudge that falls short of the slop scrolls on lift.** (2026-11-26, 21:19) On the build of
@@ -83,11 +83,86 @@
   scrolled, and past the long-press time, so the lift was a right-click
   (short-nudge-2026-11-26). A finger that has gone 5 mm from where it landed before the
   long-press time, and is still down when it passes, is a nudge: its lift scrolls by how far it
-  went (on a window's drag area it is a click where the finger stopped). A finger held to
+  went (on a window's drag area it is a click where the finger stopped). The time is counted from
+  the touch's first frame, and the finger may reach those 5 mm up to 150 ms past the long-press
+  time (2026-11-27): counted so, the owner's rested 354 ms and was 5 mm out at 526 ms. A finger held to
   right-click stays inside those 5 mm until then: of the owner's five long presses that day the
   farthest any had gone by half a second was 3.8 mm, one went 5.9 mm after 3.6 s, and all five
   right-click. A flick under 8 mm lifted inside half a second is a click where the finger
   stopped, as before.
+- **The panel's storm after a lift is no touch.** (2026-11-26, 22:03) After nearly every lift the
+  JN-MD-IPST105FP goes on reporting touches of its own for 0.3 to 1.3 s: bursts of one to nine
+  frames on the finger's row, anywhere from side to side, most closed by a lift report, often
+  after a run of lift reports from the panel's origin. The repairs above believed a still place on
+  its fifth frame and a pair on its lift report. In 29 s of the owner's use (`storm-2026-11-26`,
+  1 056 reports, 887 with the tip down for 24 touches) the storm made ten taps, one of them the
+  second click of a double-click on a window's title bar; two scrolls; and it cut a drag in two.
+  Owner, on that build: "it is still hard to touch/grab, now the telegram window just goes full
+  screen". For as long as the panel keeps reporting after a lift, a touch that begins farther
+  from the lift than the tracker would still take for the same finger is held until it shows ten
+  frames of its own or has gone 8 mm across its row, and nothing else is believed meanwhile. A
+  frame of the panel's between a touch's frames does not end it (eight of the thirty in one drag
+  were the panel's); a touch held is given up by 50 ms of silence, by its own lift report or by
+  150 ms without a frame of its own. The storm is over once the panel has sent nothing for
+  120 ms; until then every report keeps it alive, lift reports from the origin included. Judged
+  over at 120 ms without a frame, it was over before its first still burst began, and that burst
+  was a click. A tap that stands still within 15 mm of where the finger lifted is the finger back
+  for 500 ms after the lift report and is judged as at any other time: the owner's re-taps came
+  56 to 386 ms after the lift report, the panel's own still run at the lift place 580 ms after
+  it. The recording now makes 25 contacts, 8 taps, 15 scrolls and the drag. In
+  `garbled-drags-2026-11-27` (00:21, 22 s) the panel put places of its own around each of eight
+  drags; 21 contacts, 12 taps and 9 scrolls are 18, 10 and 8.
+- **A landing the panel misread before it is no click before it.** (2026-11-26) One to four frames
+  of a touch somewhere else, their lift report, and the finger's landing (probe 2026-11-24
+  17:20, 4.329 s: two frames 55 mm from where the finger landed 70 ms later; the recording of
+  22:03, 2.007 s: three at (43, 21) mm and the finger 60 mm away 15 ms after the lift report).
+  The frames were a press of two, so a click went before each scroll, at (1700, 404) in the
+  second. A touch that proves itself within 100 ms of the lift report, farther than a finger that
+  stood still could have got, is taken as that landing, and the end of the contact before it goes
+  out marked `misread`: the recognizer makes no click of it. Not so where the finger was moving
+  when it lifted.
+- **A frame of the panel's just before a landing is left out of it.** (2026-11-27, 00:21:22) At
+  1.844 s the panel reported a touch at 195.3 mm and 19 ms later the finger at 183.5 mm, still
+  from its first frame. Taken for the landing's first frame, the touch began 12 mm off and
+  moved. A chain of two that stands still on its third frame began at its second when it left
+  its first faster than 350 mm/s (measured on 52 such touches: the finger's ten left at under
+  270 mm/s, the panel's 42 at 470 and more). The rule holds with no finger down and after its
+  lift report. With a finger down and no lift report come, a fast step that stops is one of the
+  panel's sweeps pausing (22:03:34, the next bullet), so there the rule does not hold.
+- **A sweep along a resting finger's row is not the finger.** (2026-11-26, 22:03:34) With a
+  finger held at the panel's left edge to right-click, the panel reported sweeps along its row:
+  one began 27 mm from the finger and ran to 94 mm. Believed on two frames that moved on from
+  each other, it turned the hold into a scroll of 0.41. The rule that believed any place after
+  seven frames without the finger is gone. While the finger is down and no lift report has come,
+  a chain that moves from its first frames is believed only where the finger could have got to.
+  A finger the panel hid comes back at rest and moves on from there: such a chain is taken where
+  the finger could have got to, less exactly, on five frames (title-bar 2026-11-25, 29.859 s;
+  without it, two drags in the recordings came out in two).
+- **A touch is counted from its first frame, and the filter hears of a contact's end when the
+  end leaves.** (2026-11-27) The stream held a touch's first frames but passed its Began with
+  the time of the report that convinced it, and the recognizer counted a tap and a long press
+  from there: held amid the storm, a touch began up to 280 ms late, and a press of 600 ms held
+  200 looked like one of 400. The Began now carries the time of the first frame. The stream also
+  told the filter a contact had ended as soon as the tracker said so, while it was holding that
+  end for a verdict; told so, the filter dropped the chain it was judging. It is told when the
+  end goes out.
+- **What the storm's rule costs.** (2026-11-27) A touch held to prove itself goes out when it
+  does, whole and dated from its first frame, so it begins late: in the recording of 22:03 a
+  drag 158 ms after its first frame and a flick 33 ms; in the owner's use that night twelve
+  touches began 50 to 280 ms late. A flick shorter than ten frames that begins amid the storm is
+  let go: two of 109 ms and 142 ms at 9.474 s and 9.702 s of that recording were probably the
+  owner's. So is a tap of fewer than ten frames that begins within 100 ms of a lift report more
+  than 15 mm from it: in the recording of 20:54 a tap at the panel's left edge, 17 ms after the
+  lift report of a touch the panel made at its bottom-right corner (that one, 24 frames, is a
+  click still). A storm that starts again after a pause is not stopped: once the panel has been
+  quiet for 120 ms the storm is over, and what follows is judged as at any other time. In the
+  afternoon's recording (`origin-reports-2026-11-26`) the panel started again after silences of
+  198 ms, 356 ms and 643 ms, each time with a pair or a five-frame burst at another place on the
+  row, and each was a click: three of the 16 taps that recording makes are probably the panel's.
+  And the tap of 233 ms at 10.917 s of it is a scroll of 4.7 mm on lift now, where the build of
+  21:11 tapped. The panel's sweep after it runs from 12 mm right of the finger back to where it
+  lifted and closes with a lift report from there, so the touch is last seen 529 ms after it
+  landed, 4.7 mm from where: a nudge that fell short.
 - **The drag grace is off.** The Swift build, and the port until now, held each drag's press for
   1.2 s after the lift and resumed the drag when a touch came near. The tracker now carries a
   contact through the panel's tip flaps, so a lift that reaches the recognizer is one, and the

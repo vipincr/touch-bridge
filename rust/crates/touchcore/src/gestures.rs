@@ -213,11 +213,17 @@ pub struct GestureConfig {
     /// long it is down: taps and long-presses are decided inside this radius (touch slop), so a
     /// tap can wobble. A scroll or a drag is one as soon as the finger is beyond it.
     pub hold_slop_mm: f64,
-    /// How far from where it landed a finger gets before the long-press time when it is not
-    /// holding to right-click. Still inside the tap slop when the long-press time passes, such a
-    /// finger is a nudge that fell short: its lift scrolls by how far it went, where it used to
-    /// right-click.
+    /// How far from where it landed a finger gets before the long-press time (and
+    /// [`Self::nudge_grace_ns`] more) when it is not holding to right-click. Still inside the tap
+    /// slop when the long-press time passes, such a finger is a nudge that fell short: its lift
+    /// scrolls by how far it went, where it used to right-click.
     pub nudge_slop_mm: f64,
+    /// How long after the long-press time a finger may still first reach the nudge slop for its
+    /// lift to be that nudge's. A nudge creeps: the owner's of 2026-11-26 21:19 set off 354 ms
+    /// after it landed, at 22 mm/s, and was 5 mm out at 526 ms, lifting 87 ms later. A finger held
+    /// to right-click gets that far seconds later, or never (that day, five: none within 3.6 s
+    /// but one, in its last half second).
+    pub nudge_grace_ns: u64,
     pub double_tap_radius_mm: f64,
     pub double_tap_interval_ns: u64,
     pub long_press_ns: u64,
@@ -276,6 +282,7 @@ impl Default for GestureConfig {
             panel_height_mm: 173.9,
             hold_slop_mm: 8.0,
             nudge_slop_mm: 5.0,
+            nudge_grace_ns: 150_000_000,
             double_tap_radius_mm: 8.0,
             double_tap_interval_ns: 500_000_000,
             long_press_ns: 500_000_000,
@@ -596,9 +603,12 @@ impl GestureRecognizer {
         match std::mem::replace(&mut self.state, State::Ignoring) {
             State::Idle => {
                 if event.phase == ContactPhase::Began {
+                    // When the finger landed, which the stream knows even when it held the first
+                    // frames of the touch (`ContactEvent::at_ns`): the time since is what a tap,
+                    // a long press and a drag's hold are judged by.
                     self.state = State::OneFinger {
                         id: event.id,
-                        down_ns: now,
+                        down_ns: event.at_ns,
                         origin: point,
                         current: point,
                         first_move_ns: None,
@@ -700,16 +710,21 @@ impl GestureRecognizer {
                         // chatters, and that time is no finger's (owner's recording 2026-11-26,
                         // 10.954 s: a tap of 233 ms, so held, was a long press).
                         self.state = if self.active.is_empty() { State::Idle } else { State::Ignoring };
-                        let nudged_early = nudged_ns.is_some_and(|at| at.saturating_sub(down_ns) < self.config.long_press_ns);
+                        if event.misread {
+                            // The panel's misread of the landing that follows: there was no touch here to click.
+                            return smallvec![];
+                        }
+                        let nudged_early =
+                            nudged_ns.is_some_and(|at| at.saturating_sub(down_ns) < self.config.long_press_ns + self.config.nudge_grace_ns);
                         if event.at_ns.saturating_sub(down_ns) < self.config.long_press_ns {
                             smallvec![self.tap(point, event.at_ns)]
                         } else if nudged_early {
                             // A nudge that fell short of the tap slop, still down at the long-press
                             // time. Its lift was a right-click: on 2026-11-26, at 21:19, the owner's
-                            // finger rested 286 ms, crept 6.3 mm up a terminal in 280 ms and lifted
-                            // at 563 ms, just after a scroll of much the same size. A finger held to
-                            // right-click gets that far later, or never: of five that day, the
-                            // farthest any had gone by half a second was 3.8 mm.
+                            // finger rested 354 ms, crept 6.3 mm up a terminal at 22 mm/s and lifted
+                            // 87 ms after crossing the nudge slop, just after a scroll of much the
+                            // same size. A finger held to right-click gets that far later, or never:
+                            // of five that day, the farthest any had gone by half a second was 3.8 mm.
                             let mut actions = self.begin_drag(id, down_ns, origin, point, first_move_ns, now);
                             actions.extend(self.step(event, point, now, moved_on));
                             actions
@@ -1470,13 +1485,13 @@ mod tests {
 
     // The events carry no time of their own: `Script::at` dates each with the moment it feeds it.
     fn began(id: u8, x: f64, y: f64) -> ContactEvent {
-        ContactEvent { id, phase: ContactPhase::Began, x, y, at_ns: 0 }
+        ContactEvent { id, phase: ContactPhase::Began, x, y, at_ns: 0, misread: false }
     }
     fn moved(id: u8, x: f64, y: f64) -> ContactEvent {
-        ContactEvent { id, phase: ContactPhase::Moved, x, y, at_ns: 0 }
+        ContactEvent { id, phase: ContactPhase::Moved, x, y, at_ns: 0, misread: false }
     }
     fn ended(id: u8, x: f64, y: f64) -> ContactEvent {
-        ContactEvent { id, phase: ContactPhase::Ended, x, y, at_ns: 0 }
+        ContactEvent { id, phase: ContactPhase::Ended, x, y, at_ns: 0, misread: false }
     }
 
     /// The Swift `Script`: a recognizer plus every action it has produced.
@@ -1503,6 +1518,11 @@ mod tests {
         fn at(&mut self, t_ms: u64, events: &[ContactEvent]) {
             let events: Vec<ContactEvent> = events.iter().map(|event| ContactEvent { at_ns: t_ms * MS, ..*event }).collect();
             self.actions.extend(self.recognizer.handle(&events, t_ms * MS));
+        }
+        /// As `at`, for events that carry the time of their own: the stream dates a touch it held
+        /// from its first frame and an end from the finger's last.
+        fn dated(&mut self, t_ms: u64, events: &[ContactEvent]) {
+            self.actions.extend(self.recognizer.handle(events, t_ms * MS));
         }
     }
 
@@ -2576,21 +2596,64 @@ mod tests {
     }
 
     // Owner, 2026-11-26, 21:19:33, on the build that made it a right-click. After a scroll up a
-    // terminal the finger rested 286 ms, crept 6.3 mm up in 280 ms and lifted at 563 ms: under
-    // the tap slop, and past the long-press time.
+    // terminal the finger rested 354 ms, crept 6.3 mm up at 22 mm/s, was 5 mm out at 526 ms and
+    // lifted 87 ms later: under the tap slop, and 26 ms past the long-press time when it crossed
+    // the nudge slop.
     #[test]
     fn a_slow_nudge_that_falls_short_of_the_tap_slop_scrolls_on_lift() {
         let mut s = Script::in_mode(OneFingerDragMode::Scroll);
         s.at(0, &[began(0, 0.4, 0.4)]);
-        s.at(286, &[moved(0, 0.4 + mm_x(0.3), 0.4 - mm_y(0.8))]);
-        s.at(474, &[moved(0, 0.4 + mm_x(0.4), 0.4 - mm_y(5.2))]);
+        s.at(338, &[moved(0, 0.4 + mm_x(0.34), 0.4 - mm_y(0.69))]);
+        s.at(354, &[moved(0, 0.4 + mm_x(0.34), 0.4 - mm_y(1.65))]);
+        s.at(526, &[moved(0, 0.4 + mm_x(0.2), 0.4 - mm_y(5.0))]);
         let rest = PanelPoint::new(0.4 + mm_x(0.3), 0.4 - mm_y(6.3));
-        s.at(563, &[moved(0, rest.x, rest.y)]);
+        s.at(600, &[moved(0, rest.x, rest.y)]);
         assert!(s.actions.is_empty(), "inside the tap slop nothing is decided: {:?}", s.actions);
-        s.at(598, &[ended(0, rest.x, rest.y)]);
+        s.at(613, &[ended(0, rest.x, rest.y)]);
         assert!(is_scroll_began(s.actions.first(), mm_x(0.3), -mm_y(6.3)), "{:?}", s.actions);
         assert!(matches!(s.actions.last(), Some(GestureAction::ScrollEnded { .. })), "{:?}", s.actions);
         assert_eq!(s.actions.len(), 2, "a nudge that scrolled is no click: {:?}", s.actions);
+    }
+
+    // The grace is not for a finger held to right-click: one that only gets 5 mm from where it
+    // landed later than that is holding still, and its lift is a right-click.
+    #[test]
+    fn a_finger_that_reaches_the_nudge_slop_after_the_grace_right_clicks() {
+        let mut s = Script::in_mode(OneFingerDragMode::Scroll);
+        s.at(0, &[began(0, 0.4, 0.4)]);
+        s.at(651, &[moved(0, 0.4 + mm_x(0.3), 0.4 - mm_y(5.0))]);
+        let rest = PanelPoint::new(0.4 + mm_x(0.3), 0.4 - mm_y(6.3));
+        s.at(720, &[moved(0, rest.x, rest.y)]);
+        assert!(s.actions.is_empty(), "inside the tap slop nothing is decided: {:?}", s.actions);
+        s.at(740, &[ended(0, rest.x, rest.y)]);
+        assert_eq!(s.actions, [GestureAction::RightClick { at: rest }]);
+    }
+
+    // 2026-11-27: a touch the stream held for its first frames comes with the time it really
+    // landed (`ContactEvent::at_ns`), here 170 ms before its Began. Judged from the Began, a
+    // press of 600 ms was one of 430, and a tap.
+    #[test]
+    fn a_touch_the_stream_held_is_judged_from_when_it_landed() {
+        let mut s = Script::in_mode(OneFingerDragMode::Scroll);
+        s.dated(170, &[ContactEvent { at_ns: 0, ..began(0, 0.4, 0.4) }]);
+        s.dated(600, &[ContactEvent { at_ns: 600 * MS, ..ended(0, 0.4, 0.4) }]);
+        assert_eq!(s.actions, [GestureAction::RightClick { at: PanelPoint::new(0.4, 0.4) }]);
+    }
+
+    // The end of a touch the panel made up before a landing is no click, wherever it was.
+    #[test]
+    fn a_touch_the_panel_misread_before_a_landing_is_no_click() {
+        let mut s = Script::in_mode(OneFingerDragMode::Scroll);
+        s.at(0, &[began(0, 0.4, 0.4)]);
+        s.at(120, &[ContactEvent { misread: true, ..ended(0, 0.4, 0.4) }]);
+        assert!(s.actions.is_empty(), "{:?}", s.actions);
+        s.at(125, &[began(0, 0.5, 0.4)]);
+        s.at(700, &[ContactEvent { misread: true, ..ended(0, 0.5, 0.4) }]);
+        assert!(s.actions.is_empty(), "held for half a second, a misread is still no click: {:?}", s.actions);
+        // And the recognizer is none the worse for them.
+        s.at(1_000, &[began(0, 0.3, 0.3)]);
+        s.at(1_060, &[ended(0, 0.3, 0.3)]);
+        assert_eq!(s.actions, [GestureAction::Tap { at: PanelPoint::new(0.3, 0.3), count: 1 }]);
     }
 
     #[test]
