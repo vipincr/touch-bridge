@@ -71,9 +71,6 @@ use crate::window::{AppDirectory, WindowDragArea, WindowLocator};
 const SYSTEM_GESTURE_CURSOR_DELAY_NS: u64 = 800_000_000;
 /// Longest push against a bottom edge before giving up on moving the Dock.
 const DOCK_PUSH_TIMEOUT_MS: f64 = 1500.0;
-/// The recognizer-pump cadence (the Swift `expireTimer`, 50 ms repeating): a long press, a tap
-/// interval or a drag grace passes with no event to carry it. The contact stream keeps its own.
-const CADENCE_NS: u64 = 50_000_000;
 /// How often a TUIO idle frame goes out while nothing touches, so clients keep their state.
 const TUIO_IDLE_NS: u64 = 1_000_000_000;
 /// Between two nudges of a Dock push (the Swift `asyncAfter(0.015)`).
@@ -586,9 +583,6 @@ struct Pipeline {
     recognizer: GestureRecognizer,
     /// Every finger on the panel right now, in panel coordinates.
     contacts: BTreeMap<u8, PanelPoint>,
-    /// The next 50 ms step of the recognizer-pump cadence; only while a finger is on the panel
-    /// (the Swift `expireTimer`).
-    cadence_deadline: Option<u64>,
     touch_count: usize,
     max_touch_count: usize,
     panel_mode: PanelModeWatch,
@@ -711,7 +705,6 @@ impl Pipeline {
             settings,
             recognizer: GestureRecognizer::new(GestureConfig::default()),
             contacts: BTreeMap::new(),
-            cadence_deadline: None,
             touch_count: 0,
             max_touch_count: 0,
             panel_mode: PanelModeWatch::new(),
@@ -793,7 +786,6 @@ impl Pipeline {
         // First, so no frame can open a new gesture while we close the current one.
         self.source.stop();
         self.running = false;
-        self.cadence_deadline = None;
         self.deliverer.abort_gesture();
         self.reset_gesture_state(now_ns);
     }
@@ -897,12 +889,6 @@ impl Pipeline {
             self.max_touch_count = self.max_touch_count.max(self.touch_count);
             self.hooks_touch_count();
         }
-        // The 50 ms cadence (the recognizer pump) runs while a finger is on the panel.
-        if self.contacts.is_empty() {
-            self.cadence_deadline = None;
-        } else if self.cadence_deadline.is_none() {
-            self.cadence_deadline = Some(now_ns.saturating_add(CADENCE_NS));
-        }
         if self.active_input_mode == InputMode::Multitouch {
             // Every finger goes to multitouch apps; nothing reaches macOS as clicks or gestures.
             // The map is lent out and put back, so the per-frame path allocates nothing.
@@ -929,9 +915,7 @@ impl Pipeline {
                 earliest = Some(deadline);
             }
         };
-        offer(self.cadence_deadline);
         offer(self.stream.next_deadline_ns());
-        offer(self.recognizer.next_deadline_ns());
         offer(self.deliverer.next_deadline_ns());
         offer(self.dock_swipe.next_deadline_ns());
         offer(self.dock_push.as_ref().map(|push| push.next_step_ns));
@@ -963,9 +947,7 @@ impl Pipeline {
                 best = Some((deadline, due));
             }
         };
-        offer(self.cadence_deadline, Due::Cadence);
         offer(self.stream.next_deadline_ns(), Due::Contacts);
-        offer(self.recognizer.next_deadline_ns(), Due::Recognizer);
         offer(self.deliverer.next_deadline_ns(), Due::Deliverer);
         offer(self.dock_swipe.next_deadline_ns(), Due::DockSwipe);
         offer(self.dock_push.as_ref().map(|push| push.next_step_ns), Due::DockPush);
@@ -987,26 +969,6 @@ impl Pipeline {
                 #[cfg(feature = "debug")]
                 self.trace_contacts(&events, "on the timer");
                 self.process(events, now_ns);
-            }
-            Due::Cadence => {
-                // Pump the recognizer so a deadline passes with no event to carry it.
-                if self.active_input_mode != InputMode::Multitouch {
-                    let actions = self.recognizer.handle(&[], now_ns);
-                    for action in actions {
-                        self.route(action, now_ns);
-                    }
-                }
-                self.cadence_deadline = if self.contacts.is_empty() {
-                    None
-                } else {
-                    Some(now_ns.saturating_add(CADENCE_NS))
-                };
-            }
-            Due::Recognizer => {
-                let actions = self.recognizer.handle(&[], now_ns);
-                for action in actions {
-                    self.route(action, now_ns);
-                }
             }
             Due::Deliverer => self.deliverer.tick(now_ns),
             Due::DockSwipe => self.dock_swipe.tick(now_ns),
@@ -1714,7 +1676,6 @@ impl Pipeline {
         fresh.drag_zone = Some(Box::new(move |point: PanelPoint| starts_window_drag_panel(&shared, point)));
         self.recognizer = fresh;
         self.contacts.clear();
-        self.cadence_deadline = None;
         self.shared.forget_window_drag_answers();
         self.close_dock_swipe(now_ns);
         self.dock_push = None;
@@ -1774,13 +1735,9 @@ impl Pipeline {
 /// What fell due: one entry of the deadline set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Due {
-    /// The 50 ms cadence: the recognizer pump.
-    Cadence,
     /// The contact stream's own deadline: a lift report the panel has gone quiet after (or
     /// held for the debounce), or a press that has stopped reporting.
     Contacts,
-    /// The recognizer's own deadline, a drag grace running out.
-    Recognizer,
     /// The deliverer's pending cursor returns and re-sends.
     Deliverer,
     /// The dock swipe's re-sent end pairs.

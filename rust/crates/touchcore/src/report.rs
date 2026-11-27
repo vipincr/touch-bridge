@@ -5,15 +5,6 @@
 
 use smallvec::{SmallVec, smallvec};
 
-/// WCH (wch.cn, USB 0x27C0:0x0859, the JAPANNEXT JN-MD-IPST105FP) and ILITEK
-/// (USB 0x222A:0x0001, the upstream ARZOPA reference panel) USB ids.
-pub mod usb {
-    pub const WCH_VID: u16 = 0x27C0;
-    pub const WCH_PID: u16 = 0x0859;
-    pub const ILITEK_VID: u16 = 0x222A;
-    pub const ILITEK_PID: u16 = 0x0001;
-}
-
 /// One finger in a frame. Coordinates are normalized to 0..=1 across the panel.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Contact {

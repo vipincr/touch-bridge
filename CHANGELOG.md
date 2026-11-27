@@ -192,6 +192,21 @@
   came 32 mm from where it had been seen, farther than the tracker would still take it, and the
   flick's last eight frames (139 ms, 30 mm) were held and let go with their lift report, as on
   the build before.
+- **The drag grace, the 50 ms pump and the stub for other hosts are gone.** (2026-11-27) The
+  recognizer's drag grace (off since the entry below) held a press after its lift for
+  `drag_grace_ns` and resumed the drag when a touch came near. No setting carried it, and the
+  tracker does that work. With it gone the recognizer has no deadline of its own, and the
+  pipeline no longer calls it every 50 ms while a finger is down (the Swift `expireTimer`): that
+  call only ever carried the grace. The thread wakes for a report, for the stream's deadlines
+  and for the deliverer's. `touchhid`'s stub backend, the placeholder for a Linux and a Windows
+  one, never matched a panel, and nothing above the crate builds off macOS;
+  `touchcore::report::usb` held four panel ids that nothing read. No gesture changes: the 36
+  recordings replay to the same 495 contacts, 146 taps, 17 right-clicks, 185 scrolls and 5
+  drags, with the same 106 stalls. The driver's own waits were measured the same day over the
+  same recordings: a touch begins 36 ms after its first frame and ends 67 ms after the finger's
+  last one (medians), each against a fault of the panel's that is on record (README, Caveats).
+  A lead on the finger was weighed against how iOS, Windows, Android and Chromium predict, and
+  left out. 309 tests without the debug feature and 325 with them.
 - **The drag grace is off.** The Swift build, and the port until now, held each drag's press for
   1.2 s after the lift and resumed the drag when a touch came near. The tracker now carries a
   contact through the panel's tip flaps, so a lift that reaches the recognizer is one, and the

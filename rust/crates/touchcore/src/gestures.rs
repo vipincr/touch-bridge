@@ -241,21 +241,10 @@ pub struct GestureConfig {
     pub max_contacts: usize,
     pub velocity_window_ns: u64,
     pub velocity_stale_ns: u64,
-    /// When a drag's contact lifts, the press is held this long before it is committed, and a
-    /// finger returning within a velocity-scaled radius resumes the drag seamlessly. Off by
-    /// default (the Swift build held the press for 1.2 s): the tracker now carries a contact
-    /// through the panel's tip flaps, so what reaches the recognizer as a lift is one, and the
-    /// next touch is a new gesture. With the grace on, that next touch is lost instead: measured
-    /// on 2026-11-25, a tap 1.2 s after a drag was taken for the drag resuming, and the window
-    /// moved 68 pt.
-    pub drag_grace_ns: u64,
-    pub drag_resume_radius_mm: f64,
-    /// How far the resume radius grows per second of finger speed at the lift.
-    pub drag_resume_speed_gain: f64,
 }
 
 impl Default for GestureConfig {
-    /// The Swift struct's default values, but for the drag grace, which is off.
+    /// The Swift struct's default values.
     fn default() -> Self {
         Self {
             one_finger_drag: OneFingerDragMode::Scroll,
@@ -295,18 +284,8 @@ impl Default for GestureConfig {
             max_contacts: 3,
             velocity_window_ns: 100_000_000,
             velocity_stale_ns: 50_000_000,
-            drag_grace_ns: 0,
-            drag_resume_radius_mm: 20.0,
-            drag_resume_speed_gain: 0.75,
         }
     }
-}
-
-/// What a held press resumes as, after a flapped contact returns.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DragKind {
-    Drag,
-    Pan,
 }
 
 /// Which two-finger gesture a two-finger stream is locked into.
@@ -383,25 +362,11 @@ enum State {
         /// When the finger first was `nudge_slop_mm` from where it landed, if it has been.
         nudged_ns: Option<u64>,
     },
-    Dragging {
-        id: u8,
-        last: PanelPoint,
-        samples: Samples,
-    },
+    Dragging { id: u8, last: PanelPoint },
     /// One-finger scroll (scroll mode).
     Panning {
         id: u8,
         last: PanelPoint,
-        samples: Samples,
-    },
-    /// A drag whose contact lifted: the press is held until `until_ns`, resuming if a finger
-    /// returns within a radius grown by the press's speed at the lift (a WCH dropout or
-    /// contact flap), committed as a real end otherwise.
-    DragGrace {
-        kind: DragKind,
-        last: PanelPoint,
-        until_ns: u64,
-        speed_mm_s: f64,
         samples: Samples,
     },
     TwoFinger(TwoFinger),
@@ -464,21 +429,13 @@ impl GestureRecognizer {
     }
 
     /// Feed one frame's contact events in at time `at_ns` and get the actions they complete.
-    /// `at_ns` drives every deadline (long press, tap interval, drag grace), so an empty
-    /// `events` slice still advances the state machine.
+    /// Nothing here falls due with no event to carry it: a long press and a drag's hold are judged
+    /// when the finger moves or lifts, a double tap when its second tap lands.
     pub fn handle(&mut self, events: &[ContactEvent], at_ns: u64) -> SmallVec<[GestureAction; 8]> {
         if self.config.drawing_mode {
             return self.draw(events);
         }
         let mut actions: SmallVec<[GestureAction; 8]> = SmallVec::new();
-        // A drag grace past its deadline commits the held press, even with no contact events to
-        // carry it (the pipeline pumps this with an empty event list from its timer).
-        if let State::DragGrace { kind, last, until_ns, samples, .. } = &self.state
-            && at_ns >= *until_ns {
-                let action = grace_end(&self.config, *kind, *last, samples, at_ns);
-                self.state = State::Idle;
-                actions.push(action);
-            }
         self.two_finger_moved = false;
         self.three_finger_moved = false;
         self.multi_finger_moved = false;
@@ -499,7 +456,7 @@ impl GestureRecognizer {
                     self.state = State::MultiFinger(multi);
                     continue;
                 }
-                actions.extend(self.cancel(at_ns));
+                actions.extend(self.cancel());
                 continue;
             }
             // A report's last word on a finger is where the finger is. An earlier place in the same
@@ -542,16 +499,6 @@ impl GestureRecognizer {
         c.notification_center_swipe = true;
     }
 
-    /// The earliest time at which the recognizer changes state with no further input: the end of a
-    /// drag grace that is holding a press. `None` when only new events can move it, which lets the
-    /// caller sleep until an event arrives or this time passes.
-    pub fn next_deadline_ns(&self) -> Option<u64> {
-        match &self.state {
-            State::DragGrace { until_ns, .. } => Some(*until_ns),
-            _ => None,
-        }
-    }
-
     /// More fingers than a one-, two- or three-finger gesture allows; four or five may form a
     /// dock swipe.
     fn contact_limit(&self) -> usize {
@@ -588,7 +535,7 @@ impl GestureRecognizer {
         // area: the drag is recognised only after some travel, and the window would jump that far
         // to catch up with the finger.
         let at = if on_drag_area && self.drag_zone.as_ref().is_some_and(|zone| zone(point)) { point } else { origin };
-        self.state = State::Dragging { id, last: point, samples: smallvec![(down_ns, origin), (now, point)] };
+        self.state = State::Dragging { id, last: point };
         let mut actions = smallvec![GestureAction::DragBegan { at, hold }];
         if point != at {
             actions.push(GestureAction::DragMoved { to: point });
@@ -735,38 +682,22 @@ impl GestureRecognizer {
                 }
             }
 
-            State::Dragging { id, last, samples } => {
+            State::Dragging { id, last } => {
                 if event.id != id {
-                    self.state = State::Dragging { id, last, samples };
+                    self.state = State::Dragging { id, last };
                     return smallvec![];
                 }
                 match event.phase {
                     ContactPhase::Moved => {
-                        let kept: Samples = samples
-                            .into_iter()
-                            .filter(|&(ns, _)| now - ns <= self.config.velocity_window_ns)
-                            .collect();
-                        let mut kept = kept;
-                        kept.push((now, point));
-                        self.state = State::Dragging { id, last: point, samples: kept };
+                        self.state = State::Dragging { id, last: point };
                         smallvec![GestureAction::DragMoved { to: point }]
-                    }
-                    ContactPhase::Ended if self.config.drag_grace_ns > 0 => {
-                        self.state = State::DragGrace {
-                            kind: DragKind::Drag,
-                            last: point,
-                            until_ns: now + self.config.drag_grace_ns,
-                            speed_mm_s: speed_mm_s(&self.config, &samples, now),
-                            samples,
-                        };
-                        smallvec![]
                     }
                     ContactPhase::Ended => {
                         self.state = if self.active.is_empty() { State::Idle } else { State::Ignoring };
                         smallvec![GestureAction::DragEnded { at: point }]
                     }
                     ContactPhase::Began => {
-                        self.state = State::Dragging { id, last, samples };
+                        self.state = State::Dragging { id, last };
                         smallvec![GestureAction::DragEnded { at: last }]
                     }
                 }
@@ -791,16 +722,6 @@ impl GestureRecognizer {
                             phase: GesturePhase::Changed,
                         }]
                     }
-                    ContactPhase::Ended if self.config.drag_grace_ns > 0 => {
-                        self.state = State::DragGrace {
-                            kind: DragKind::Pan,
-                            last: point,
-                            until_ns: now + self.config.drag_grace_ns,
-                            speed_mm_s: speed_mm_s(&self.config, &samples, now),
-                            samples,
-                        };
-                        smallvec![]
-                    }
                     ContactPhase::Ended => {
                         self.state = if self.active.is_empty() { State::Idle } else { State::Ignoring };
                         let (velocity_x, velocity_y) = velocity(&self.config, &samples, now);
@@ -808,70 +729,6 @@ impl GestureRecognizer {
                     }
                     ContactPhase::Began => {
                         self.state = State::Panning { id, last, samples };
-                        smallvec![]
-                    }
-                }
-            }
-
-            State::DragGrace { kind, last, until_ns, speed_mm_s, samples } => {
-                // The resume radius grows with how fast the finger was moving and how long it was
-                // gone: a dropout during a slow drag resumes tens of millimetres along its way,
-                // while a tap near the release point stays outside it.
-                let resume_radius_mm = self.config.drag_resume_radius_mm
-                    + speed_mm_s * (now - (until_ns - self.config.drag_grace_ns)) as f64 / 1_000_000_000.0
-                        * self.config.drag_resume_speed_gain;
-                match event.phase {
-                    ContactPhase::Began
-                        if now < until_ns && distance_mm(&self.config, point, last) <= resume_radius_mm =>
-                    {
-                        // The finger came back (a dropout or contact flap): the press never
-                        // happened to end.
-                        match kind {
-                            DragKind::Drag => {
-                                self.state =
-                                    State::Dragging { id: event.id, last: point, samples: smallvec![(now, point)] };
-                                if point != last {
-                                    smallvec![GestureAction::DragMoved { to: point }]
-                                } else {
-                                    smallvec![]
-                                }
-                            }
-                            DragKind::Pan => {
-                                let mut kept: Samples = samples
-                                    .into_iter()
-                                    .filter(|&(ns, _)| now - ns <= self.config.velocity_window_ns)
-                                    .collect();
-                                kept.push((now, point));
-                                self.state = State::Panning { id: event.id, last: point, samples: kept };
-                                smallvec![GestureAction::Scroll {
-                                    dx: point.x - last.x,
-                                    dy: point.y - last.y,
-                                    phase: GesturePhase::Changed,
-                                }]
-                            }
-                        }
-                    }
-                    ContactPhase::Began => {
-                        // A touch somewhere else: the held press ends, the new touch starts fresh.
-                        // (The state is still a drag grace here, so Swift's contact limit resolves
-                        // to max_contacts.)
-                        let action = grace_end(&self.config, kind, last, &samples, now);
-                        self.state = if self.active.len() > self.config.max_contacts {
-                            State::Ignoring
-                        } else {
-                            State::OneFinger {
-                                id: event.id,
-                                down_ns: now,
-                                origin: point,
-                                current: point,
-                                first_move_ns: None,
-                                nudged_ns: None,
-                            }
-                        };
-                        smallvec![action]
-                    }
-                    ContactPhase::Moved | ContactPhase::Ended => {
-                        self.state = State::DragGrace { kind, last, until_ns, speed_mm_s, samples };
                         smallvec![]
                     }
                 }
@@ -1046,14 +903,11 @@ impl GestureRecognizer {
 
     // Palm
 
-    /// The action that commits a held press whose grace ran out (or was cut short).
-    fn cancel(&mut self, now: u64) -> SmallVec<[GestureAction; 8]> {
+    /// Ends the gesture under way, as a palm or one finger too many interrupts it.
+    fn cancel(&mut self) -> SmallVec<[GestureAction; 8]> {
         let old = std::mem::replace(&mut self.state, State::Ignoring);
         let actions = match &old {
             State::Dragging { last, .. } => smallvec![GestureAction::DragEnded { at: *last }],
-            State::DragGrace { kind, last, samples, .. } => {
-                smallvec![grace_end(&self.config, *kind, *last, samples, now)]
-            }
             State::ThreeFinger(t) if t.dragging => smallvec![GestureAction::DragEnded { at: t.last_anchor }],
             State::MultiFinger(m) => match m.lock {
                 Some(kind) => smallvec![GestureAction::DockSwipeCancelled { kind }],
@@ -1417,24 +1271,6 @@ fn velocity(config: &GestureConfig, samples: &[(u64, PanelPoint)], now: u64) -> 
     }
     let seconds = (last_ns - first_ns) as f64 / 1e9;
     ((last.x - first.x) / seconds, (last.y - first.y) / seconds)
-}
-
-/// The press's speed in mm/s over its recent samples: how far a returning finger may have
-/// travelled during a dropout.
-fn speed_mm_s(config: &GestureConfig, samples: &[(u64, PanelPoint)], now: u64) -> f64 {
-    let (vx, vy) = velocity(config, samples, now);
-    f64::hypot(vx * config.panel_width_mm, vy * config.panel_height_mm)
-}
-
-/// The action that commits a held press whose grace ran out (or was cut short).
-fn grace_end(config: &GestureConfig, kind: DragKind, last: PanelPoint, samples: &[(u64, PanelPoint)], now: u64) -> GestureAction {
-    match kind {
-        DragKind::Drag => GestureAction::DragEnded { at: last },
-        DragKind::Pan => {
-            let (velocity_x, velocity_y) = velocity(config, samples, now);
-            GestureAction::ScrollEnded { velocity_x, velocity_y }
-        }
-    }
 }
 
 // Geometry (millimetres, so the panel's aspect ratio doesn't skew distances or angles)
@@ -1839,7 +1675,7 @@ mod tests {
 
     #[test]
     fn in_scroll_mode_a_one_finger_pan_scrolls_with_momentum() {
-        let mut s = Script::build(OneFingerDragMode::Scroll, |c| c.drag_grace_ns = 0);
+        let mut s = Script::in_mode(OneFingerDragMode::Scroll);
         s.at(0, &[began(0, 0.5, 0.5)]);
         s.at(30, &[moved(0, 0.5, 0.5 + mm_y(5.0))]);
         s.at(40, &[moved(0, 0.5, 0.5 + mm_y(12.0))]);
@@ -2668,11 +2504,12 @@ mod tests {
         assert_eq!(s.actions, [GestureAction::DragBegan { at: rest, hold: false }, GestureAction::DragEnded { at: rest }]);
     }
 
-    // Drag grace (off by default; the tracker bridges the panel's tip flaps)
+    // A lift ends the drag: the tracker carries a contact through the panel's tip flaps, so the
+    // recognizer holds no press after a lift and has no deadline of its own.
 
-    /// A lift ends the drag when the tracker reports it. The touch that follows is its own
-    /// gesture, even where the drag stopped and soon after it: owner, 2026-11-25, "did it on the
-    /// telegram windown and it didnt respond and then it jumped around".
+    /// The touch that follows a drag is its own gesture, even where the drag stopped and soon
+    /// after it: owner, 2026-11-25, "did it on the telegram windown and it didnt respond and then
+    /// it jumped around".
     #[test]
     fn a_touch_after_the_drag_has_lifted_is_a_new_gesture() {
         let mut s = Script::new();
@@ -2681,128 +2518,9 @@ mod tests {
         s.at(70, &[moved(0, 0.3 + mm_x(20.0), 0.3)]);
         s.at(80, &[ended(0, 0.3 + mm_x(20.0), 0.3)]);
         assert_eq!(s.actions.last(), Some(&GestureAction::DragEnded { at: PanelPoint::new(0.3 + mm_x(20.0), 0.3) }));
-        assert_eq!(s.recognizer.next_deadline_ns(), None);
         s.at(380, &[began(1, 0.3 + mm_x(24.0), 0.3)]); // 4 mm on, 300 ms later
         s.at(440, &[ended(1, 0.3 + mm_x(24.0), 0.3)]);
         assert_eq!(s.actions.last(), Some(&GestureAction::Tap { at: PanelPoint::new(0.3 + mm_x(24.0), 0.3), count: 1 }));
         assert_eq!(s.actions.iter().filter(|a| matches!(a, GestureAction::DragBegan { .. })).count(), 1);
-    }
-
-    // Switched on, the grace holds a drag through a dropout. These tests say so each time.
-
-    #[test]
-    fn a_flapped_drag_resumes_without_re_grabbing() {
-        let mut s = Script::configured(|c| c.drag_grace_ns = 150_000_000);
-        s.at(0, &[began(0, 0.3, 0.3)]);
-        s.at(50, &[moved(0, 0.3 + mm_x(12.0), 0.3)]);
-        s.at(70, &[moved(0, 0.3 + mm_x(20.0), 0.3)]);
-        s.at(80, &[ended(0, 0.3 + mm_x(20.0), 0.3)]); // the contact flaps off mid-drag
-        s.at(140, &[began(1, 0.3 + mm_x(24.0), 0.3), moved(1, 0.3 + mm_x(30.0), 0.3)]); // it returns, renumbered
-        s.at(400, &[ended(1, 0.3 + mm_x(30.0), 0.3)]);
-        s.at(600, &[]); // nothing: the grace deadline passes quietly
-        assert_eq!(
-            s.actions,
-            [
-                GestureAction::DragBegan { at: PanelPoint::new(0.3, 0.3), hold: false },
-                GestureAction::DragMoved { to: PanelPoint::new(0.3 + mm_x(12.0), 0.3) },
-                GestureAction::DragMoved { to: PanelPoint::new(0.3 + mm_x(20.0), 0.3) },
-                GestureAction::DragMoved { to: PanelPoint::new(0.3 + mm_x(24.0), 0.3) },
-                GestureAction::DragMoved { to: PanelPoint::new(0.3 + mm_x(30.0), 0.3) },
-                GestureAction::DragEnded { at: PanelPoint::new(0.3 + mm_x(30.0), 0.3) },
-            ]
-        );
-    }
-
-    #[test]
-    fn an_unresumed_drag_ends_when_the_grace_passes() {
-        let mut s = Script::configured(|c| c.drag_grace_ns = 150_000_000);
-        s.at(0, &[began(0, 0.3, 0.3)]);
-        s.at(50, &[moved(0, 0.3 + mm_x(12.0), 0.3)]);
-        s.at(60, &[ended(0, 0.3 + mm_x(12.0), 0.3)]);
-        assert_eq!(
-            s.actions.last(),
-            Some(&GestureAction::DragMoved { to: PanelPoint::new(0.3 + mm_x(12.0), 0.3) })
-        );
-        s.at(100, &[]); // inside the grace: still held
-        assert_eq!(s.actions.len(), 2);
-        s.at(220, &[]); // past the grace: the press commits
-        assert_eq!(
-            s.actions.last(),
-            Some(&GestureAction::DragEnded { at: PanelPoint::new(0.3 + mm_x(12.0), 0.3) })
-        );
-    }
-
-    #[test]
-    fn a_held_grace_reports_its_deadline_and_nothing_else_does() {
-        let mut s = Script::configured(|c| c.drag_grace_ns = 150_000_000);
-        assert_eq!(s.recognizer.next_deadline_ns(), None);
-        s.at(0, &[began(0, 0.3, 0.3)]);
-        s.at(50, &[moved(0, 0.3 + mm_x(12.0), 0.3)]);
-        assert_eq!(s.recognizer.next_deadline_ns(), None);
-        s.at(60, &[ended(0, 0.3 + mm_x(12.0), 0.3)]);
-        assert_eq!(s.recognizer.next_deadline_ns(), Some(60 * MS + 150_000_000));
-        s.at(220, &[]);
-        assert_eq!(s.recognizer.next_deadline_ns(), None);
-    }
-
-    #[test]
-    fn a_flapped_scroll_resumes_with_the_same_stream() {
-        let mut s = Script::build(OneFingerDragMode::Scroll, |c| c.drag_grace_ns = 150_000_000);
-        s.at(0, &[began(0, 0.5, 0.5)]);
-        s.at(40, &[moved(0, 0.5, 0.5 + mm_y(12.0))]);
-        s.at(50, &[ended(0, 0.5, 0.5 + mm_y(12.0))]);
-        s.at(120, &[began(2, 0.5, 0.5 + mm_y(16.0))]);
-        s.at(300, &[ended(2, 0.5, 0.5 + mm_y(16.0))]);
-        s.at(500, &[]);
-        let Some(&GestureAction::Scroll { dy: dy0, phase: phase0, dx: _ }) = s.actions.first() else {
-            panic!("expected scroll began");
-        };
-        assert!(phase0 == GesturePhase::Began && f64::abs(dy0 - mm_y(12.0)) < 1e-9);
-        let Some(&GestureAction::Scroll { dy: dy1, phase: phase1, dx: _ }) = s.actions.get(1) else {
-            panic!("expected scroll changed on resume");
-        };
-        assert!(phase1 == GesturePhase::Changed && f64::abs(dy1 - mm_y(4.0)) < 1e-9);
-        assert!(matches!(s.actions.last(), Some(GestureAction::ScrollEnded { .. })));
-    }
-
-    /// With the grace at the Swift build's 1.2 s, a long dropout mid-drag is held, and a finger
-    /// resuming tens of millimetres along its way continues the same drag instead of re-grabbing
-    /// wherever it reappeared.
-    #[test]
-    fn a_long_dropout_mid_drag_is_bridged_with_a_radius_grown_by_speed() {
-        let mut s = Script::configured(|c| c.drag_grace_ns = 1_200_000_000);
-        s.at(0, &[began(0, 0.3, 0.3)]);
-        s.at(50, &[moved(0, 0.3 + mm_x(12.0), 0.3)]);
-        s.at(70, &[moved(0, 0.3 + mm_x(20.0), 0.3)]);
-        s.at(80, &[ended(0, 0.3 + mm_x(20.0), 0.3)]); // the panel drops out mid-drag
-        s.at(680, &[began(1, 0.3 + mm_x(40.0), 0.3)]); // 600 ms later, 20 mm along the way
-        s.at(900, &[ended(1, 0.3 + mm_x(44.0), 0.3)]);
-        s.at(2200, &[]); // the second grace runs out quietly
-        assert_eq!(
-            s.actions.iter().filter(|a| matches!(a, GestureAction::DragBegan { .. })).count(),
-            1
-        );
-        assert_eq!(
-            s.actions.last(),
-            Some(&GestureAction::DragEnded { at: PanelPoint::new(0.3 + mm_x(44.0), 0.3) })
-        );
-    }
-
-    /// A touch landing far from the held drag is not that drag's finger coming back: the drag
-    /// commits its end and the new touch is its own gesture.
-    #[test]
-    fn a_touch_far_from_the_held_drag_commits_the_end_instead_of_resuming() {
-        let mut s = Script::configured(|c| c.drag_grace_ns = 1_200_000_000);
-        s.at(0, &[began(0, 0.3, 0.3)]);
-        s.at(50, &[moved(0, 0.3 + mm_x(12.0), 0.3)]);
-        s.at(70, &[moved(0, 0.3 + mm_x(20.0), 0.3)]);
-        s.at(80, &[ended(0, 0.3 + mm_x(20.0), 0.3)]);
-        s.at(380, &[began(1, 0.3 + mm_x(120.0), 0.3)]); // 100 mm away: not this drag's finger
-        s.at(440, &[ended(1, 0.3 + mm_x(120.0), 0.3)]);
-        assert!(s.actions.contains(&GestureAction::DragEnded { at: PanelPoint::new(0.3 + mm_x(20.0), 0.3) }));
-        assert_eq!(
-            s.actions.last(),
-            Some(&GestureAction::Tap { at: PanelPoint::new(0.3 + mm_x(120.0), 0.3), count: 1 })
-        );
     }
 }

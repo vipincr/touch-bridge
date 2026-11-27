@@ -193,7 +193,7 @@ The pipeline tracks up to 10 fingers (`InputPipeline.onContacts`). macOS has no 
   - **Safari bridge:** a userscript that injects TouchBridge's fingers as touch or pointer events, for touch-only pages such as that tester.
   - **"Take turns":** time-share the one mouse between fingers, so several strokes grow at once in ordinary apps, as fragmented strokes.
 
-## Window dragging (improved 2026-10-09, needs owner's feel test)
+## Window dragging (improved 2026-10-09; feel reported 2026-11-27)
 
 - **Owner report:** dragging windows by the title bar "works but feels a little counter-intuitive".
 - **Cause:** the log showed drags 28–43 pt below Safari's top edge routed as normal drags or scrolls. The fixed 28 pt title band covered only half of Safari's roughly 50 pt toolbar.
@@ -201,3 +201,4 @@ The pipeline tracks up to 10 fingers (`InputPipeline.onContacts`). macOS has no 
 - **If it still feels off,** candidates are:
   1. no 3 mm pan slop before a window drag starts;
   2. starting the Warp drag at touch-down instead of at classification time.
+- **2026-11-27, the Rust port:** owner: "it is okay and the window moves as the finger, its just not under my finger when moving". The gap while a drag moves is the panel's one report every 17 ms and the way from macOS to the glass; the driver posts each move 1 to 3 ms after the panel's report. A lead on the finger was weighed against how iOS, Windows, Android and Chromium predict, and left out (README, Caveats). Neither candidate above was tried. A press at touch-down (2) brings back the jump of the dead travel that 2.0.0 took out, and a drag now waits for the tap's 8 mm, not 3 mm (1).

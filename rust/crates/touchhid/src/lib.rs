@@ -1,9 +1,9 @@
 //! Touch-panel HID access.
 //!
-//! One backend per host, selected at compile time. The backend finds the panel, seizes its HID
-//! interfaces (so the host's own cursor emulation stops), performs the panel's mode unlock where one
-//! is needed, and delivers raw reports and status lines to the sink its consumer hands it. Everything
-//! above this crate is portable.
+//! The backend finds the panel, seizes its HID interfaces (so the host's own cursor emulation
+//! stops), performs the panel's mode unlock where one is needed, and delivers raw reports and
+//! status lines to the sink its consumer hands it. The rest of the driver reaches the panel through
+//! this crate alone.
 
 /// The clock the driver runs on: nanoseconds, monotonic, the same clock IOKit stamps reports with.
 pub mod clock;
@@ -32,17 +32,6 @@ pub enum PanelEvent {
 /// synchronous calls would wait for the queue for ever.
 pub type PanelSink = Box<dyn Fn(PanelEvent) + Send>;
 
-#[cfg(target_os = "macos")]
 pub mod macos;
 
-#[cfg(target_os = "macos")]
 pub use macos::HidTouchSource;
-
-/// Placeholder until the hidraw (Linux) and WinHID (Windows) backends land; both platforms' stacks
-/// handle HID multitouch natively, so their backends exist for the TUIO/driver use cases, not for
-/// basic touch.
-#[cfg(not(target_os = "macos"))]
-pub mod stub;
-
-#[cfg(not(target_os = "macos"))]
-pub use stub::HidTouchSource;
