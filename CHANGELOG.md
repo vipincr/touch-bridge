@@ -172,10 +172,15 @@
   just not under my finger when moving". A still chain that begins within 50 ms of the lift
   report, where the tracker would still take the finger for the contact, is believed on its third
   frame, as any still chain: 32 frames of that recording went out with a later frame of their
-  own, and 19 do now. Later than 50 ms a chain waits for five frames as before. The panel's own
+  own, and 19 do now. Later than 50 ms a chain waits for five frames as before: the panel's own
   still places come within that reach too (origin-reports 2026-11-26, 11.640 s: three frames
   29 mm from a scroll's end, 177 ms after its lift report), and believed on three they made a
-  scroll of 28 mm. And a finger that leaves fast, its first frame the report right after the last
+  scroll of 28 mm. A wider window was tried, up to 140 ms, over the 36 recordings, for the
+  flaps with one of the panel's places in between, where the finger is back 69 to 105 ms after
+  the report: no gesture changes, but the flicks at 3.922 s and 8.064 s of `storm-2026-11-26`
+  lose their last step (scrolls of 18.7 and 44.5 mm become 11.9 and 32.7), because a chain
+  believed on three frames hands the fast step a flick ends with to a new chain, which has no
+  time to prove itself. And a finger that leaves fast, its first frame the report right after the last
   one seen and just outside the trust distance, is believed on its second frame: 5 mm a frame
   stays within the trust distance of a chain's first frame for two frames, and was taken for a
   chain at rest (16:25:08, two frames held after the filter had taken the finger for slow). In

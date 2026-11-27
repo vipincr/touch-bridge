@@ -258,9 +258,13 @@ pub struct SingleTouchFilter {
     /// (it reported the tip off while the finger was down): a report or two is missing, and the
     /// finger is then 13 to 22 mm on and coming to rest (measured, 2026-11-26 and 2026-11-27: 17
     /// to 38 ms after the report). A still chain that begins there and then, where the tracker
-    /// would still take the finger, is believed on its third frame like any still chain. The
-    /// panel's own still places within that reach start later: origin-reports 2026-11-26, 11.640
-    /// s has three frames 29 mm from a scroll's end, 177 ms after its lift report.
+    /// would still take the finger, is believed on its third frame like any still chain. With one
+    /// of the panel's places in between the finger is back later, 69 to 105 ms after the report,
+    /// and such a chain waits for its five frames: let in on three, a flick loses its last step,
+    /// the one frame beyond the trust distance that it ends with (storm-2026-11-26, 3.922 s: a
+    /// scroll of 18.7 mm becomes one of 11.9). The panel's own still places come later still:
+    /// origin-reports 2026-11-26, 11.640 s has three frames 29 mm from a scroll's end, 177 ms
+    /// after its lift report.
     pub flap_ns: u64,
 
     finger: Option<Finger>,
@@ -2040,6 +2044,28 @@ mod tests {
         // Their lift report confirms nothing: three frames, and not a pair.
         let lift = filter.filter(mouse(146.6, 69.8, false), t + 245 * MS, WIDTH, HEIGHT);
         assert_eq!(lift.to_vec(), vec![mouse(146.6, 69.8, false)]);
+    }
+
+    // The same flap with one of the panel's places in between (2026-11-27, 16:25:07: one 88 mm
+    // off, closed by a lift report of its own): the finger is back 69 ms after the lift report,
+    // within the tracker's reach, and waits for its fifth frame as any chain after a lift report;
+    // the drag stood still for 72 ms. Let in on its third, the flick at 3.922 s of
+    // storm-2026-11-26, back as late, loses the last step it ends with: a scroll of 18.7 mm
+    // becomes one of 11.9.
+    #[test]
+    fn a_still_chain_69_ms_after_a_lift_report_waits_for_its_fifth_frame() {
+        let (mut filter, t) = settled(120.2, 80.8);
+        let lift = filter.filter(mouse(120.2, 80.8, false), t + 17 * MS, WIDTH, HEIGHT);
+        assert_eq!(lift.to_vec(), vec![mouse(120.2, 80.8, false)]);
+        assert!(feed(&mut filter, 220.0, 80.8, t + 34 * MS).is_empty());
+        let _ = filter.filter(mouse(220.0, 80.8, false), t + 51 * MS, WIDTH, HEIGHT);
+        for index in 0..4u64 {
+            filter.told_reach(Some(32.0));
+            let frames = feed(&mut filter, 146.6, 69.8, t + (86 + 17 * index) * MS);
+            assert!(frames.is_empty(), "{index}: {frames:?}");
+        }
+        filter.told_reach(Some(32.0));
+        assert_eq!(feed(&mut filter, 146.6, 69.8, t + 154 * MS), vec![(146.6, 69.8); 5]);
     }
 
     // 2026-11-27, 16:25:08: after 105 ms without the finger the filter took it for slow, and its
