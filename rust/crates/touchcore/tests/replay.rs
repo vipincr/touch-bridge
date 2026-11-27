@@ -78,6 +78,9 @@ struct Contact {
 struct Replay {
     contacts: Vec<Contact>,
     actions: Vec<(u64, GestureAction)>,
+    /// How many frames went out with a later frame of their own: the filter held them until
+    /// then, and the contact stood still and jumped.
+    held_frames: usize,
 }
 
 /// Feeds a recording the way the pipeline does: each report at its recorded time, and before
@@ -90,7 +93,7 @@ fn replay(source: &str, panel: (f64, f64), config: GestureConfig) -> Replay {
     let recording = Recording::new(source);
     let mut stream = ContactStream::for_panel(panel.0, panel.1);
     let mut recognizer = GestureRecognizer::new(config);
-    let mut replay = Replay { contacts: Vec::new(), actions: Vec::new() };
+    let mut replay = Replay { contacts: Vec::new(), actions: Vec::new(), held_frames: 0 };
     let mut open: BTreeMap<u8, usize> = BTreeMap::new();
 
     fn take(
@@ -101,6 +104,10 @@ fn replay(source: &str, panel: (f64, f64), config: GestureConfig) -> Replay {
         open: &mut BTreeMap<u8, usize>,
     ) {
         replay.actions.extend(recognizer.handle(events, at_ns).into_iter().map(|action| (at_ns, action)));
+        if !events.iter().any(|event| event.phase == ContactPhase::Began) {
+            let moved = events.iter().filter(|event| event.phase == ContactPhase::Moved).count();
+            replay.held_frames += moved.saturating_sub(1);
+        }
         for event in events {
             match event.phase {
                 ContactPhase::Began => {
@@ -708,14 +715,16 @@ const GARBLED: &str = include_str!("fixtures/garbled-drags-2026-11-27.jsonl");
 
 #[test]
 fn the_places_the_panel_reports_around_the_drags_are_no_touches() {
-    // After the first drag (0.388 s to 1.520 s): a click at (1568, 693) and a scroll of 180 ms on
-    // that build. After the fourth (7.481 s to 9.816 s): a click at (2128, 366).
+    // After the first drag (0.352 s to 2.934 s, its last 0.8 s garbled: places of the panel's and
+    // lift reports between the finger's frames): on that build a click at (1568, 693) and a scroll
+    // of 180 ms, and until 2026-11-27 the drag cut at 1.520 s and taken up again at 1.863 s.
+    // After the fourth (7.481 s to 9.816 s): a click at (2128, 366).
     let replay = scrolling(GARBLED);
     for (from_ms, to_ms) in [(1_530, 2_020), (9_820, 10_170)] {
         let begun = touches(&replay, from_ms * 1_000_000, to_ms * 1_000_000);
         assert!(begun.is_empty(), "{from_ms} to {to_ms} ms: {}", describe(&replay));
     }
-    assert_eq!(replay.contacts.len(), 18, "{}", describe(&replay));
+    assert_eq!(replay.contacts.len(), 17, "{}", describe(&replay));
 }
 
 #[test]
@@ -723,8 +732,8 @@ fn each_drag_is_one_contact_whole() {
     // How many frames each of the eight went out with.
     let replay = scrolling(GARBLED);
     let frames: Vec<usize> = replay.contacts.iter().filter(|contact| contact.frames >= 19).map(|contact| contact.frames).collect();
-    assert_eq!(frames, [27, 41, 45, 94, 46, 28, 31, 19], "{}", describe(&replay));
-    assert_eq!(balanced(replay.actions.iter().map(|(_, action)| action))["scroll"], 8, "{}", describe(&replay));
+    assert_eq!(frames, [75, 45, 94, 46, 28, 31, 19], "{}", describe(&replay));
+    assert_eq!(balanced(replay.actions.iter().map(|(_, action)| action))["scroll"], 7, "{}", describe(&replay));
 }
 
 #[test]
@@ -756,5 +765,41 @@ fn the_taps_of_the_garbled_drags_are_the_owners_and_the_double_click_is_counted(
         assert!((at - want_at).abs() <= 1, "a tap at {at}, wanted {want_at}: {}", describe(&replay));
     }
     let of = |name: &str| balanced(replay.actions.iter().map(|(_, action)| action)).get(name).copied().unwrap_or(0);
-    assert_eq!((of("scroll"), of("tap"), of("rightClick"), of("drag")), (8, 10, 0, 0));
+    assert_eq!((of("scroll"), of("tap"), of("rightClick"), of("drag")), (7, 10, 0, 0));
+}
+
+// drag-2026-11-27 holds 27 s of the owner's use at 16:25 on 2026-11-27, on the build of 11:24: a
+// tap on the desktop, a tap on a window, a window dragged by its title bar for 7.4 s, two taps and
+// thirteen scrolls. Owner: "tried, it is okay and the window moves as the finger, its just not
+// under my finger when moving". In the drag and the scrolls the panel reported the tip off from
+// under the finger eight times and went quiet for a report or two. Seven times the finger came
+// back 13 to 22 mm on and to rest: held for five frames each time, the contact stood for 70 ms
+// and jumped. The eighth (18.335 s) was a finger going 289 mm/s whose frames were beyond what
+// the tracker would still take; they are dropped under either rule. Counted as this harness
+// counts them, 32 frames of the recording went out with a later frame of their own; 19 do now.
+
+const DRAG: &str = include_str!("fixtures/drag-2026-11-27.jsonl");
+
+#[test]
+fn the_window_drag_and_the_scrolls_go_on_through_the_panels_flaps() {
+    let replay = scrolling(DRAG);
+    let drag = touches(&replay, 5 * SECOND / 2, 13 * SECOND / 5);
+    assert_eq!(drag.len(), 1, "{}", describe(&replay));
+    assert_eq!((tenths(drag[0].began_ns), tenths(drag[0].landed_ns), tenths(drag[0].ended_ns), drag[0].frames), (25_150, 24_790, 99_360, 382), "{}", describe(&replay));
+    assert_eq!(replay.contacts.len(), 18, "{}", describe(&replay));
+    // What is left: at 7.208 s four frames, one of the panel's having come between the flap and
+    // the finger's first frame 69 ms after its report, so that the chain waited for five; and
+    // elsewhere the one or two frames a chain waits to be believed.
+    assert_eq!(replay.held_frames, 19, "{}", describe(&replay));
+    let taps: Vec<(i64, u32)> = replay
+        .actions
+        .iter()
+        .filter_map(|(at_ns, action)| match action {
+            GestureAction::Tap { count, .. } => Some((tenths(*at_ns), *count)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(taps, [(3_070, 1), (16_300, 1), (114_360, 1), (125_800, 1)], "{}", describe(&replay));
+    let of = |name: &str| balanced(replay.actions.iter().map(|(_, action)| action)).get(name).copied().unwrap_or(0);
+    assert_eq!((of("scroll"), of("tap"), of("rightClick"), of("drag")), (13, 4, 0, 0));
 }

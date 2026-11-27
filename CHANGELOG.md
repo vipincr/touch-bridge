@@ -163,6 +163,30 @@
   21:11 tapped. The panel's sweep after it runs from 12 mm right of the finger back to where it
   lifted and closes with a lift report from there, so the touch is last seen 529 ms after it
   landed, 4.7 mm from where: a nudge that fell short.
+- **A drag or a scroll goes on through the panel's flaps.** (2026-11-27, 16:25) The panel reports
+  the tip off while the finger is down, then says nothing for a report or two, and reports the
+  finger 13 to 22 mm on. After a lift report the filter believed nothing short of five frames of
+  a chain's own, so each flap stood the contact still for 70 ms and then jumped. In the owner's
+  7.4 s drag of a window (`drag-2026-11-27`, 757 reports) that happened three times, and four
+  times more in the scrolls after it. Owner: "it is okay and the window moves as the finger, its
+  just not under my finger when moving". A still chain that begins within 50 ms of the lift
+  report, where the tracker would still take the finger for the contact, is believed on its third
+  frame, as any still chain: 32 frames of that recording went out with a later frame of their
+  own, and 19 do now. Later than 50 ms a chain waits for five frames as before. The panel's own
+  still places come within that reach too (origin-reports 2026-11-26, 11.640 s: three frames
+  29 mm from a scroll's end, 177 ms after its lift report), and believed on three they made a
+  scroll of 28 mm. And a finger that leaves fast, its first frame the report right after the last
+  one seen and just outside the trust distance, is believed on its second frame: 5 mm a frame
+  stays within the trust distance of a chain's first frame for two frames, and was taken for a
+  chain at rest (16:25:08, two frames held after the filter had taken the finger for slow). In
+  `garbled-drags-2026-11-27` the first drag is one contact now, 75 frames to 2.934 s, where the
+  build cut it at 1.520 s and took it up again at 1.863 s. One standstill is left in
+  `drag-2026-11-27`: the flap at 7.067 s, one of the panel's frames coming between the report
+  and the finger's first frame 69 ms after it. A flap in the middle of a fast flick is not
+  mended either: at 18.335 s of that recording the finger was going 289 mm/s, its next frame
+  came 32 mm from where it had been seen, farther than the tracker would still take it, and the
+  flick's last eight frames (139 ms, 30 mm) were held and let go with their lift report, as on
+  the build before.
 - **The drag grace is off.** The Swift build, and the port until now, held each drag's press for
   1.2 s after the lift and resumed the drag when a touch came near. The tracker now carries a
   contact through the panel's tip flaps, so a lift that reaches the recognizer is one, and the

@@ -328,11 +328,12 @@ mod tests {
     }
 
     // A drag that flaps: the panel reports the lift while the finger is going, and the finger is
-    // back 51 ms after its last frame, 20 mm on and off the course the filter still knows. The
-    // tracker holds a lift for a finger that was moving, and takes a touch for the same contact
-    // for 250 ms: the stream tells the filter how far (30 mm by then), and the five frames the
-    // filter needs for a touch after a lift are left to the tracker. Held as a place of the
-    // panel's in the storm after a lift, they were given up, and the drag ended where it flapped.
+    // back 51 ms after its last frame, 20 mm on and off the course the filter still knows, and at
+    // rest. The tracker holds a lift for a finger that was moving, and takes a touch for the same
+    // contact for 250 ms: the stream tells the filter how far (30 mm by then), and the finger is
+    // believed on its third frame, as any still chain is. Held as a place of the panel's in the
+    // storm after a lift, the frames were given up, and the drag ended where it flapped; until
+    // 2026-11-27 they waited for a fifth.
     #[test]
     fn a_drag_that_flaps_goes_on_where_the_tracker_still_takes_the_finger() {
         let mut stream = ContactStream::for_panel(WIDTH, HEIGHT);
@@ -352,13 +353,52 @@ mod tests {
         );
         // The lift report: held by the tracker.
         assert!(report(&mut stream, mouse(140.8, 70.0, false), 85 * MS).is_empty());
-        for index in 0..4u64 {
+        for index in 0..2u64 {
             let events = report(&mut stream, mouse(161.2, 70.0, true), (119 + 17 * index) * MS);
             assert!(events.is_empty(), "{index}: {events:?}");
         }
-        assert_eq!(said(&report(&mut stream, mouse(161.2, 70.0, true), 187 * MS)), vec![(ContactPhase::Moved, 161.2, 70.0, 187, false)]);
+        assert_eq!(said(&report(&mut stream, mouse(161.2, 70.0, true), 153 * MS)), vec![(ContactPhase::Moved, 161.2, 70.0, 153, false)]);
+        // The finger stands there: its frames go through, and at one place make no event.
+        for at_ms in [170, 187] {
+            assert!(report(&mut stream, mouse(161.2, 70.0, true), at_ms * MS).is_empty(), "{at_ms} ms");
+        }
         assert!(report(&mut stream, mouse(161.2, 70.0, false), 204 * MS).is_empty());
         assert_eq!(said(&quiet_until(&mut stream, 500 * MS)), vec![(ContactPhase::Ended, 161.2, 70.0, 187, false)]);
+    }
+
+    // The same flap, and the finger comes back moving on: it waits for five frames of its own, as
+    // any chain after a lift report. Believed on their second frame where the tracker would still
+    // take the finger (tried, 2026-11-27), moving chains cost the recordings taps: the panel's
+    // sweeps begin where the finger lifted.
+    #[test]
+    fn a_finger_that_comes_back_from_a_flap_moving_on_waits_for_five_frames() {
+        let mut stream = ContactStream::for_panel(WIDTH, HEIGHT);
+        let mut said_so_far = Vec::new();
+        for (index, x) in [100.0, 110.2, 120.4, 130.6, 140.8].into_iter().enumerate() {
+            said_so_far.extend(said(&report(&mut stream, mouse(x, 70.0, true), 17 * MS * index as u64)));
+        }
+        assert_eq!(said_so_far.len(), 5, "{said_so_far:?}");
+        // The lift report: held by the tracker.
+        assert!(report(&mut stream, mouse(140.8, 70.0, false), 85 * MS).is_empty());
+        // The finger is back 34 ms after the lift report, 20 mm on, and its frames go on across
+        // the finger's course at 200 mm/s: no frame of them lies where the finger was heading.
+        for (index, y) in [70.0, 77.0, 84.0, 91.0].into_iter().enumerate() {
+            let events = report(&mut stream, mouse(161.2, y, true), (119 + 34 * index as u64) * MS);
+            assert!(events.is_empty(), "{index}: {events:?}");
+        }
+        // Believed on the fifth, the five go out together.
+        assert_eq!(
+            said(&report(&mut stream, mouse(161.2, 98.0, true), 255 * MS)),
+            vec![
+                (ContactPhase::Moved, 161.2, 70.0, 255, false),
+                (ContactPhase::Moved, 161.2, 77.0, 255, false),
+                (ContactPhase::Moved, 161.2, 84.0, 255, false),
+                (ContactPhase::Moved, 161.2, 91.0, 255, false),
+                (ContactPhase::Moved, 161.2, 98.0, 255, false),
+            ]
+        );
+        assert!(report(&mut stream, mouse(161.2, 98.0, false), 289 * MS).is_empty());
+        assert_eq!(said(&quiet_until(&mut stream, 600 * MS)), vec![(ContactPhase::Ended, 161.2, 98.0, 255, false)]);
     }
 
     // 2026-11-26, 22:03:01, 2.007 s, had the landing been a flick upward from 42 mm off, with two

@@ -132,8 +132,14 @@ pub(crate) const REST_SPEED_MM_S: f64 = 50.0;
 ///
 /// Once a lift report has come (the tracker is then holding the contact, see [`crate::stream`]),
 /// only belief on a chain's own counts: around a lift the panel's other places are its misreads,
-/// in runs of up to four frames. The same is asked for [`Self::reach_ns`] after a contact has
-/// ended of a press reported farther than [`Self::trust_mm`] from where the last one was.
+/// in runs of up to four frames. The finger back from a flap is the exception. The panel reports
+/// the tip off while the finger is down, and for a report or two after that says nothing; the
+/// finger then comes back 13 to 22 mm on, within [`Self::flap_ns`] of the report, and stands
+/// still. A still chain that begins there, where the tracker would still take the finger, is
+/// believed on its third frame (2026-11-27, 16:25: seven flaps in one drag and the scrolls after
+/// it stood the contact still for 70 ms each, and jumped 13 to 22 mm). The same is asked for [`Self::reach_ns`]
+/// after a contact has ended of a press reported farther than [`Self::trust_mm`] from where the
+/// last one was.
 ///
 /// After a lift the panel goes on reporting touches of its own, in storms: 2026-11-26, in one
 /// evening's use, after nearly every lift for 0.3 to 1.3 s, bursts of one to nine frames on the
@@ -248,6 +254,14 @@ pub struct SingleTouchFilter {
     /// third frame after a step of 40 mm/s or more, the finger's ten had left their first frame at
     /// under 270 mm/s, 4.7 mm in one frame, and the panel's 42 at 470 mm/s and more).
     pub land_speed_mm_s: f64,
+    /// How soon after a lift report the finger's own frames come back when the panel only flapped
+    /// (it reported the tip off while the finger was down): a report or two is missing, and the
+    /// finger is then 13 to 22 mm on and coming to rest (measured, 2026-11-26 and 2026-11-27: 17
+    /// to 38 ms after the report). A still chain that begins there and then, where the tracker
+    /// would still take the finger, is believed on its third frame like any still chain. The
+    /// panel's own still places within that reach start later: origin-reports 2026-11-26, 11.640
+    /// s has three frames 29 mm from a scroll's end, 177 ms after its lift report.
+    pub flap_ns: u64,
 
     finger: Option<Finger>,
     chain: SmallVec<[Seen; 8]>,
@@ -321,6 +335,7 @@ impl SingleTouchFilter {
             storm_frames: 10,
             storm_cross_mm: 8.0,
             land_speed_mm_s: 350.0,
+            flap_ns: 50_000_000,
             finger: None,
             chain: SmallVec::new(),
             entry: None,
@@ -706,9 +721,7 @@ impl SingleTouchFilter {
     /// what was settled for the chain when `first` came is settled again for `second`.
     fn rebegin(&mut self, first: Seen, second: Seen) {
         self.stray = Some(first);
-        if self.soon == Some(first) {
-            self.soon = Some(second);
-        } else if self.soon.is_none() && self.within_storm_start(second.at_ns) {
+        if self.soon == Some(first) || (self.soon.is_none() && self.within_storm_start(second.at_ns)) {
             self.soon = Some(second);
         }
         // In the storm if it was on when the second frame came. Until then the first frame, held,
@@ -764,9 +777,23 @@ impl SingleTouchFilter {
             }
         };
         let frames = self.chain.len();
-        let standing = self.staying && self.finger.is_some();
+        // A chain that keeps to its first frame is at rest, unless it is a finger leaving fast:
+        // its first frame is the report right after the finger's last sighting, just outside the
+        // trust distance, and its second moved on from it (2026-11-27, 16:25:08: after 105 ms
+        // without the finger the filter took it for slow; its next frames, 8 mm and 5 mm on, were
+        // held for a third, and the drag stood still for 36 ms). That is a chain in motion.
+        let leaving_fast = match (self.finger, self.chain.first()) {
+            (Some(finger), Some(&first)) => {
+                self.chain.len() == 2
+                    && first.at_ns.saturating_sub(finger.at.at_ns) <= 25_000_000
+                    && distance(first, finger.at) <= 2.0 * self.trust_mm
+                    && !self.last_step_rests()
+            }
+            _ => false,
+        };
+        let standing = self.staying && self.finger.is_some() && !leaving_fast;
         let needed = if standing { 3 } else { 2 };
-        let unsupported = self.lifted || self.elsewhere(first);
+        let unsupported = (self.lifted && !self.back_from_flap(first)) || self.elsewhere(first);
         // A new press waits for its third frame, or for the report of its lift (`filter`).
         if self.finger.is_none() && !unsupported && frames < 3 {
             return smallvec![];
@@ -797,6 +824,25 @@ impl SingleTouchFilter {
             return if self.provisional.is_none() { self.hold() } else { smallvec![] };
         }
         self.believe()
+    }
+
+    /// Whether the chain's last step was no faster than a resting finger's wander
+    /// ([`REST_SPEED_MM_S`]). A chain of one frame has no step: it is at rest.
+    fn last_step_rests(&self) -> bool {
+        self.chain.len() < 2 || speed(step(self.chain[self.chain.len() - 2], self.chain[self.chain.len() - 1])) <= REST_SPEED_MM_S
+    }
+
+    /// Whether a chain that stands still, whose first frame is `first`, is the finger back from one
+    /// of the panel's flaps. A lift report has come ([`SingleTouchFilter::lifted`]), the chain's
+    /// first frame came within [`Self::flap_ns`] of it, and it began where the tracker would still
+    /// take the finger for the contact whose lift it holds (the reach it told of,
+    /// [`Self::told_reach`]). So judged, it is believed on its third frame as any still chain is;
+    /// a chain after a lift report otherwise waits for five.
+    fn back_from_flap(&self, first: Seen) -> bool {
+        self.staying
+            && self.storm.as_ref().is_some_and(|lift| {
+                first.at_ns.saturating_sub(lift.at_ns) <= self.flap_ns && self.told_reach_mm.is_some_and(|reach| distance(first, *lift) <= reach)
+            })
     }
 
     /// Whether a touch whose first frame is `first` begins amid the storm that follows a lift:
@@ -1939,6 +1985,96 @@ mod tests {
             assert!(frames.is_empty(), "{x} mm: {frames:?}");
         }
         assert_eq!(feed(&mut filter, 50.3, 70.0, t + 187 * MS), vec![(50.3, 70.0)]);
+    }
+
+    // 2026-11-27, 16:25:06: a drag going 160 mm/s. The panel reported the tip off from where the
+    // finger was, said nothing for 37 ms, and reported the finger 17 mm on, at rest. The tracker
+    // would still take it (it told of 19 mm). Believed on its fifth frame, the drag stood still
+    // for 87 ms and then jumped; on its third, for 53.
+    #[test]
+    fn the_finger_back_from_a_flap_is_believed_on_its_third_frame() {
+        let (mut filter, t) = settled(78.2, 81.8);
+        assert_eq!(feed(&mut filter, 80.0, 79.7, t + 17 * MS), vec![(80.0, 79.7)]);
+        let lift = filter.filter(mouse(80.0, 79.7, false), t + 34 * MS, WIDTH, HEIGHT);
+        assert_eq!(lift.to_vec(), vec![mouse(80.0, 79.7, false)]);
+        for index in 0..2u64 {
+            filter.told_reach(Some(19.0));
+            let frames = feed(&mut filter, 90.2, 66.6, t + (71 + 17 * index) * MS);
+            assert!(frames.is_empty(), "{index}: {frames:?}");
+        }
+        filter.told_reach(Some(19.0));
+        assert_eq!(feed(&mut filter, 90.4, 66.3, t + 105 * MS), vec![(90.2, 66.6), (90.2, 66.6), (90.4, 66.3)]);
+    }
+
+    // The same flap where the tracker would not take the finger back (it told of 10 mm): a touch
+    // amid the storm, held to ten frames as any.
+    #[test]
+    fn a_still_chain_beyond_the_trackers_reach_after_a_lift_report_waits_as_before() {
+        let (mut filter, t) = settled(78.2, 81.8);
+        assert_eq!(feed(&mut filter, 80.0, 79.7, t + 17 * MS), vec![(80.0, 79.7)]);
+        let lift = filter.filter(mouse(80.0, 79.7, false), t + 34 * MS, WIDTH, HEIGHT);
+        assert_eq!(lift.to_vec(), vec![mouse(80.0, 79.7, false)]);
+        for index in 0..9u64 {
+            filter.told_reach(Some(10.0));
+            let frames = feed(&mut filter, 90.2, 66.6, t + (71 + 17 * index) * MS);
+            assert!(frames.is_empty(), "{index}: {frames:?}");
+        }
+        filter.told_reach(Some(10.0));
+        assert_eq!(feed(&mut filter, 90.2, 66.6, t + 224 * MS).len(), 10);
+    }
+
+    // 2026-11-26 (origin-reports, 11.463 s): a scroll ended, and 177 ms after its lift report the
+    // panel reported a place 29 mm away, three frames still. That is within what the tracker would
+    // still have taken for the finger (it told of 32 mm by the third frame), and late: the panel's,
+    // which waits for five frames like any chain after a lift report.
+    #[test]
+    fn a_still_place_long_after_a_lift_report_is_not_the_finger_back_from_a_flap() {
+        let (mut filter, t) = settled(120.2, 80.8);
+        let lift = filter.filter(mouse(120.2, 80.8, false), t + 17 * MS, WIDTH, HEIGHT);
+        assert_eq!(lift.to_vec(), vec![mouse(120.2, 80.8, false)]);
+        for index in 0..3u64 {
+            filter.told_reach(Some(32.0));
+            let frames = feed(&mut filter, 146.6, 69.8, t + (194 + 17 * index) * MS);
+            assert!(frames.is_empty(), "{index}: {frames:?}");
+        }
+        // Their lift report confirms nothing: three frames, and not a pair.
+        let lift = filter.filter(mouse(146.6, 69.8, false), t + 245 * MS, WIDTH, HEIGHT);
+        assert_eq!(lift.to_vec(), vec![mouse(146.6, 69.8, false)]);
+    }
+
+    // 2026-11-27, 16:25:08: after 105 ms without the finger the filter took it for slow, and its
+    // next frames were 8 mm and 5 mm on. Each within the trust distance of the chain's first
+    // frame, so a chain at rest by the letter, though the finger was going 460 mm/s. Held for a
+    // third frame, the drag stood still for 36 ms and jumped 14 mm. The first frame is the report
+    // right after the finger's, so this is the finger leaving fast, believed on its second frame.
+    // A chain whose first frame comes later is judged as before (`a_place_on_the_fingers_line_far_ahead_is_not_the_finger`).
+    #[test]
+    fn a_finger_that_leaves_fast_after_the_filter_took_it_for_slow_is_believed_on_its_second_frame() {
+        let (mut filter, t) = settled(96.4, 125.0);
+        assert_eq!(feed(&mut filter, 91.5, 127.5, t + 105 * MS), vec![(91.5, 127.5)]);
+        assert!(feed(&mut filter, 83.6, 126.5, t + 122 * MS).is_empty());
+        assert_eq!(feed(&mut filter, 79.0, 125.0, t + 139 * MS), vec![(83.6, 126.5), (79.0, 125.0)]);
+    }
+
+    // Nor one that starts a report or more after the finger's last sighting: 51 ms passed, and
+    // the finger may have stopped.
+    #[test]
+    fn a_chain_that_starts_after_a_gap_is_no_finger_leaving_fast() {
+        let (mut filter, t) = settled(96.4, 125.0);
+        assert_eq!(feed(&mut filter, 91.5, 127.5, t + 17 * MS), vec![(91.5, 127.5)]);
+        assert!(feed(&mut filter, 83.6, 126.5, t + 68 * MS).is_empty());
+        assert!(feed(&mut filter, 79.0, 125.0, t + 85 * MS).is_empty(), "51 ms after the finger: a chain at rest still");
+        assert_eq!(feed(&mut filter, 75.0, 124.0, t + 102 * MS), vec![(83.6, 126.5), (79.0, 125.0), (75.0, 124.0)]);
+    }
+
+    // The report right after the finger's, but 12 mm and more from where it was, is no finger
+    // leaving fast: the chain is one at rest, and waits for its third frame.
+    #[test]
+    fn a_chain_that_starts_farther_than_twice_the_trust_distance_is_no_finger_leaving_fast() {
+        let (mut filter, t) = settled(91.5, 127.5);
+        assert!(feed(&mut filter, 79.2, 126.5, t + 17 * MS).is_empty());
+        assert!(feed(&mut filter, 75.5, 126.0, t + 34 * MS).is_empty(), "12.4 mm from the finger: a chain at rest still");
+        assert_eq!(feed(&mut filter, 72.0, 125.5, t + 51 * MS), vec![(79.2, 126.5), (75.5, 126.0), (72.0, 125.5)]);
     }
 
     // Title-bar 2026-11-25, 29.859 s: three frames 9 mm to the right of a slow drag, then the
